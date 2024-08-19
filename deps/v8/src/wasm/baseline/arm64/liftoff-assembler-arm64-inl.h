@@ -675,6 +675,13 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
                             LoadType type, uint32_t* protected_load_pc,
                             bool /* is_load_mem */, bool i64_offset,
                             bool needs_shift) {
+  
+  // Debugging printing out memory info at runtime.
+  std::cout << "Load called: dst=" << dst.gp().code() 
+              << ", src_addr=" << src_addr.code() 
+              << ", offset=" << offset_imm 
+              << ", type=" << type.value() << std::endl;
+
   UseScratchRegisterScope temps(this);
   unsigned shift_amount = needs_shift ? type.size_log_2() : 0;
   MemOperand src_op = liftoff::GetMemOp(this, &temps, src_addr, offset_reg,
@@ -733,6 +740,13 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
                              StoreType type, LiftoffRegList /* pinned */,
                              uint32_t* protected_store_pc,
                              bool /* is_store_mem */, bool i64_offset) {
+
+  // Debugging printing out memory info at runtime.
+  std::cout << "Store called: dst_addr=" << dst_addr.code()
+              << ", src=" << src.gp().code() 
+              << ", offset=" << offset_imm 
+              << ", type=" << type.value() << std::endl;
+
   UseScratchRegisterScope temps(this);
   MemOperand dst_op = liftoff::GetMemOp(this, &temps, dst_addr, offset_reg,
                                         offset_imm, i64_offset);

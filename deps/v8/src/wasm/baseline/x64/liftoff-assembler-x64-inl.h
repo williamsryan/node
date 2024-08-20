@@ -497,12 +497,41 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
                             LoadType type, uint32_t* protected_load_pc,
                             bool /* is_load_mem */, bool i64_offset,
                             bool needs_shift) {
+  // Calculate the effective address
+  uintptr_t effective_address = src_addr.code() + offset_imm;
+  if (offset_reg != no_reg && !i64_offset) {
+    effective_address += offset_reg.code();
+  }
+
+  // Read the value from the effective address
+  uint64_t value = 0;
+  switch (type.value()) {
+    case LoadType::kI32Load8U:
+    case LoadType::kI64Load8U:
+      value = *reinterpret_cast<uint8_t*>(effective_address);
+      break;
+    case LoadType::kI32Load16U:
+    case LoadType::kI64Load16U:
+      value = *reinterpret_cast<uint16_t*>(effective_address);
+      break;
+    case LoadType::kI32Load:
+    case LoadType::kI64Load32U:
+      value = *reinterpret_cast<uint32_t*>(effective_address);
+      break;
+    case LoadType::kI64Load:
+      value = *reinterpret_cast<uint64_t*>(effective_address);
+      break;
+    default:
+      std::cerr << "Unsupported load type" << std::endl;
+      return;
+  }
 
   // Debugging printing out memory info at runtime.
-  std::cout << "Load called: dst=" << dst.gp().code() 
-              << ", src_addr=" << src_addr.code() 
-              << ", offset=" << offset_imm 
-              << ", type=" << type.value() << std::endl;
+  std::cout << "Load called: dst=" << dst.gp().code()
+            << ", src_addr=" << src_addr.code() << ", offset=" << offset_imm
+            << ", type=" << type.value()
+            << ", effective_address=" << effective_address
+            << ", value=" << value << std::endl;
 
   if (offset_reg != no_reg && !i64_offset) AssertZeroExtended(offset_reg);
   static_assert(times_4 == 2);
@@ -562,13 +591,48 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
                              StoreType type, LiftoffRegList /* pinned */,
                              uint32_t* protected_store_pc,
                              bool /* is_store_mem */, bool i64_offset) {
+  // Calculate the effective address
+  uintptr_t effective_address = dst_addr.code() + offset_imm;
+  if (offset_reg != no_reg && !i64_offset) {
+    effective_address += offset_reg.code();
+  }
+
+  // Retrieve the value from the src register
+  uint64_t value = 0;
+  switch (type.value()) {
+    case StoreType::kI32Store8:
+    case StoreType::kI64Store8:
+      value = static_cast<uint8_t>(src.gp().code());
+      break;
+    case StoreType::kI32Store16:
+    case StoreType::kI64Store16:
+      value = static_cast<uint16_t>(src.gp().code());
+      break;
+    case StoreType::kI32Store:
+    case StoreType::kI64Store32:
+      value = static_cast<uint32_t>(src.gp().code());
+      break;
+    case StoreType::kI64Store:
+      value = static_cast<uint64_t>(src.gp().code());
+      break;
+    case StoreType::kF32Store:
+      value = *reinterpret_cast<uint32_t*>(&src.fp().code());
+      break;
+    case StoreType::kF32StoreF16:
+      value = *reinterpret_cast<uint16_t*>(&src.fp().code());
+      break;
+    default:
+      std::cerr << "Unsupported store type" << std::endl;
+      return;
+  }
 
   // Debugging printing out memory info at runtime.
   std::cout << "Store called: dst_addr=" << dst_addr.code()
-              << ", src=" << src.gp().code() 
-              << ", offset=" << offset_imm 
-              << ", type=" << type.value() << std::endl;
-                                         
+            << ", src=" << src.gp().code() << ", offset=" << offset_imm
+            << ", type=" << type.value()
+            << ", effective_address=" << effective_address
+            << ", value=" << value << std::endl;
+
   if (offset_reg != no_reg && !i64_offset) AssertZeroExtended(offset_reg);
   Operand dst_op = liftoff::GetMemOp(this, dst_addr, offset_reg, offset_imm);
   if (protected_store_pc) *protected_store_pc = pc_offset();

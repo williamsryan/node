@@ -54,6 +54,18 @@ constexpr Operand kOSRTargetSlot = GetStackSlot(kOSRTargetOffset);
 inline Operand GetMemOp(LiftoffAssembler* assm, Register addr,
                         Register offset_reg, uintptr_t offset_imm,
                         ScaleFactor scale_factor = times_1) {
+
+  uintptr_t base_address = addr.code(); 
+  uintptr_t offset_reg_value = (offset_reg != no_reg) ? offset_reg.code() : 0;
+  uintptr_t linear_memory_address = base_address + offset_imm + (offset_reg_value * scale_factor);
+
+  // Debugging output
+  std::cout << "Linear Memory Address: " << linear_memory_address
+            << " (base=" << base_address
+            << ", offset_imm=" << offset_imm
+            << ", offset_reg_value=" << offset_reg_value
+            << ", scale_factor=" << scale_factor << ")" << std::endl;
+
   if (is_uint31(offset_imm)) {
     int32_t offset_imm32 = static_cast<int32_t>(offset_imm);
     return offset_reg == no_reg
@@ -505,30 +517,30 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
 
   // Read the value from the effective address
   uint64_t value = 0;
-  switch (type.value()) {
-    case LoadType::kI32Load8U:
-    case LoadType::kI64Load8U:
-      value = *reinterpret_cast<uint8_t*>(effective_address);
-      break;
-    case LoadType::kI32Load16U:
-    case LoadType::kI64Load16U:
-      value = *reinterpret_cast<uint16_t*>(effective_address);
-      break;
-    case LoadType::kI32Load:
-    case LoadType::kI64Load32U:
-      value = *reinterpret_cast<uint32_t*>(effective_address);
-      break;
-    case LoadType::kI64Load:
-      value = *reinterpret_cast<uint64_t*>(effective_address);
-      break;
-    default:
-      std::cerr << "Unsupported load type" << std::endl;
-      return;
-  }
+  // switch (type.value()) {
+  //   case LoadType::kI32Load8U:
+  //   case LoadType::kI64Load8U:
+  //     value = *reinterpret_cast<uint8_t*>(effective_address);
+  //     break;
+  //   case LoadType::kI32Load16U:
+  //   case LoadType::kI64Load16U:
+  //     value = *reinterpret_cast<uint16_t*>(effective_address);
+  //     break;
+  //   case LoadType::kI32Load:
+  //   case LoadType::kI64Load32U:
+  //     value = *reinterpret_cast<uint32_t*>(effective_address);
+  //     break;
+  //   case LoadType::kI64Load:
+  //     value = *reinterpret_cast<uint64_t*>(effective_address);
+  //     break;
+  //   default:
+  //     std::cerr << "Unsupported load type" << std::endl;
+  //     return;
+  // }
 
-  // Debugging printing out memory info at runtime.
-  std::cout << "Load called: dst=" << dst.gp().code()
-            << ", src_addr=" << src_addr.code() << ", offset=" << offset_imm
+  // Debugging printing out memory info at runtime
+  std::cout << "Load called: dst=" << dst.gp()
+            << ", src_addr=" << src_addr << ", offset=" << offset_imm
             << ", type=" << type.value()
             << ", effective_address=" << effective_address
             << ", value=" << value << std::endl;
@@ -597,7 +609,7 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
     effective_address += offset_reg.code();
   }
 
-  // Retrieve the value from the src register
+  // // Retrieve the value from the src register
   uint64_t value = 0;
   switch (type.value()) {
     case StoreType::kI32Store8:
@@ -609,26 +621,29 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
       value = static_cast<uint16_t>(src.gp().code());
       break;
     case StoreType::kI32Store:
-    case StoreType::kI64Store32:
       value = static_cast<uint32_t>(src.gp().code());
       break;
     case StoreType::kI64Store:
       value = static_cast<uint64_t>(src.gp().code());
       break;
     case StoreType::kF32Store:
-      value = *reinterpret_cast<uint32_t*>(&src.fp().code());
+      value = static_cast<uint32_t>(src.fp().code());
       break;
-    case StoreType::kF32StoreF16:
-      value = *reinterpret_cast<uint16_t*>(&src.fp().code());
+    case StoreType::kF64Store:
+      value = static_cast<uint64_t>(src.fp().code());
+      break;
+    case StoreType::kS128Store:
+      // Assuming S128 is stored as 128-bit value
+      value = static_cast<uint64_t>(src.fp().code());
       break;
     default:
-      std::cerr << "Unsupported store type" << std::endl;
-      return;
+      UNIMPLEMENTED();
+      break;
   }
 
-  // Debugging printing out memory info at runtime.
-  std::cout << "Store called: dst_addr=" << dst_addr.code()
-            << ", src=" << src.gp().code() << ", offset=" << offset_imm
+  // Debugging printing out memory info at runtime
+  std::cout << "Store called: dst_addr=" << dst_addr
+            << ", src=" << src.gp() << ", offset=" << offset_imm
             << ", type=" << type.value()
             << ", effective_address=" << effective_address
             << ", value=" << value << std::endl;

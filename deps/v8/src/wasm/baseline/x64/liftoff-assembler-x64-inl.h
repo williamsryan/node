@@ -60,11 +60,12 @@ inline Operand GetMemOp(LiftoffAssembler* assm, Register addr,
   uintptr_t linear_memory_address = base_address + offset_imm + (offset_reg_value * scale_factor);
 
   // Debugging output
-  std::cout << "Linear Memory Address: " << linear_memory_address
-            << " (base=" << base_address
-            << ", offset_imm=" << offset_imm
-            << ", offset_reg_value=" << offset_reg_value
-            << ", scale_factor=" << scale_factor << ")" << std::endl;
+  std::cout << "GetMemOp called with:" << std::endl;
+  std::cout << "  addr: " << base_address << std::endl;
+  std::cout << "  offset_reg: " << offset_reg_value << std::endl;
+  std::cout << "  offset_imm: " << offset_imm << std::endl;
+  std::cout << "  scale_factor: " << scale_factor << std::endl;
+  std::cout << "  Linear Memory Address: " << linear_memory_address << std::endl;
 
   if (is_uint31(offset_imm)) {
     int32_t offset_imm32 = static_cast<int32_t>(offset_imm);
@@ -516,7 +517,7 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
   }
 
   // Read the value from the effective address
-  uint64_t value = 0;
+  // uint64_t value = 0;
   // switch (type.value()) {
   //   case LoadType::kI32Load8U:
   //   case LoadType::kI64Load8U:
@@ -539,11 +540,11 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
   // }
 
   // Debugging printing out memory info at runtime
-  std::cout << "Load called: dst=" << dst.gp()
-            << ", src_addr=" << src_addr << ", offset=" << offset_imm
-            << ", type=" << type.value()
-            << ", effective_address=" << effective_address
-            << ", value=" << value << std::endl;
+  // std::cout << "Load called: dst=" << dst.gp()
+  //           << ", src_addr=" << src_addr << ", offset=" << offset_imm
+  //           << ", type=" << type.value()
+  //           << ", effective_address=" << effective_address
+  //           << ", value=" << value << std::endl;
 
   if (offset_reg != no_reg && !i64_offset) AssertZeroExtended(offset_reg);
   static_assert(times_4 == 2);
@@ -609,7 +610,7 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
     effective_address += offset_reg.code();
   }
 
-  // // Retrieve the value from the src register
+  // Retrieve the value from the src register
   uint64_t value = 0;
   switch (type.value()) {
     case StoreType::kI32Store8:
@@ -637,7 +638,8 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
       value = static_cast<uint64_t>(src.fp().code());
       break;
     default:
-      UNIMPLEMENTED();
+      // UNIMPLEMENTED();
+      std::cerr << "Oopsie" << std::endl;
       break;
   }
 

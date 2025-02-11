@@ -5,6 +5,13 @@
 #ifndef V8_WASM_BASELINE_ARM64_LIFTOFF_ASSEMBLER_ARM64_INL_H_
 #define V8_WASM_BASELINE_ARM64_LIFTOFF_ASSEMBLER_ARM64_INL_H_
 
+#include <fmt/core.h>
+
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <unordered_map>
+
 #include "src/codegen/arm64/macro-assembler-arm64-inl.h"
 #include "src/heap/mutable-page-metadata.h"
 #include "src/wasm/baseline/liftoff-assembler.h"
@@ -99,6 +106,12 @@ inline CPURegister AcquireByType(UseScratchRegisterScope* temps,
       UNREACHABLE();
   }
 }
+
+struct MemoryAccessInfo {
+  uint32_t num_accesses = 0;
+  std::optional<int> constant_value = std::nullopt;
+  bool constant = true;
+};
 
 static std::unordered_map<uintptr_t, MemoryAccessInfo> memory_accesses;
 
@@ -411,26 +424,25 @@ void LiftoffAssembler::PatchPrepareStackFrame(
   b((func_start_offset - pc_offset()) >> kInstrSizeLog2);
 }
 
-void LiftoffAssembler::FinishCode() {
-    DumpMemoryAccessStats();
-    ForceConstantPoolEmissionWithoutJump();
+void DumpMemoryAccessStats() {
+  nlohmann::json memory_json;
+
+  for (const auto& [address, info] : memory_accesses) {
+    memory_json["memory_accesses"][fmt::format("0x{:X}", address)] = {
+        {"num_accesses", info.num_accesses}, {"constant", info.constant}};
+  }
+
+  std::ofstream file("memory_access_log.json");
+  file << memory_json.dump(2);  // Pretty-print JSON
+  file.close();
+
+  std::cout << "[MemHook] Memory access stats written to memory_access_log.json"
+            << std::endl;
 }
 
-void DumpMemoryAccessStats() {
-    nlohmann::json memory_json;
-
-    for (const auto& [address, info] : memory_accesses) {
-        memory_json["memory_accesses"][fmt::format("0x{:X}", address)] = {
-            {"num_accesses", info.num_accesses},
-            {"constant", info.constant}
-        };
-    }
-
-    std::ofstream file("memory_access_log.json");
-    file << memory_json.dump(2);  // Pretty-print JSON
-    file.close();
-
-    std::cout << "[MemHook] Memory access stats written to memory_access_log.json" << std::endl;
+void LiftoffAssembler::FinishCode() {
+  DumpMemoryAccessStats();
+  ForceConstantPoolEmissionWithoutJump();
 }
 
 void LiftoffAssembler::AbortCompilation() { AbortedCodeGeneration(); }
@@ -697,73 +709,75 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
                             LoadType type, uint32_t* protected_load_pc,
                             bool /* is_load_mem */, bool i64_offset,
                             bool needs_shift) {
-    UseScratchRegisterScope temps(this);
-    unsigned shift_amount = needs_shift ? type.size_log_2() : 0;
-    MemOperand src_op = liftoff::GetMemOp(this, &temps, src_addr, offset_reg,
-                                          offset_imm, i64_offset, shift_amount);
+  UseScratchRegisterScope temps(this);
+  unsigned shift_amount = needs_shift ? type.size_log_2() : 0;
+  MemOperand src_op = liftoff::GetMemOp(this, &temps, src_addr, offset_reg,
+                                        offset_imm, i64_offset, shift_amount);
 
-    // Compute the actual memory address being accessed
-    uintptr_t effective_addr = reinterpret_cast<uintptr_t>(src_addr.code() + offset_imm);
+  // Compute the actual memory address being accessed
+  uintptr_t effective_addr =
+      reinterpret_cast<uintptr_t>(src_addr.code() + offset_imm);
 
-    // Track the memory read
-    auto& entry = memory_accesses[effective_addr];
-    entry.num_accesses++;
+  // Track the memory read
+  auto& entry = memory_accesses[effective_addr];
+  entry.num_accesses++;
 
-    // Store the first read value (if not set)
-    if (entry.constant_value == std::nullopt) {
-        entry.constant_value = /* TODO: Capture the value read here */;
-    } else {
-        // If value changes, mark it as non-constant
-        if (*entry.constant_value != /* TODO: Capture the value read here */) {
-            entry.constant = false;
-        }
+  // Store the first read value (if not set)
+  if (entry.constant_value == std::nullopt) {
+    entry.constant_value = dst.gp().W().code();  // Capture loaded value
+  } else {
+    // If value changes, mark it as non-constant
+    if (*entry.constant_value != dst.gp().W().code()) {
+      entry.constant = false;
     }
+  }
 
-    DCHECK(!src_op.IsPostIndex());
-    GetProtectedInstruction<LoadOrStore::kLoad> collect_protected_load(this, protected_load_pc);
-    
-    // Execute the actual load operation
-    switch (type.value()) {
-        case LoadType::kI32Load8U:
-        case LoadType::kI64Load8U:
-            Ldrb(dst.gp().W(), src_op);
-            break;
-        case LoadType::kI32Load8S:
-            Ldrsb(dst.gp().W(), src_op);
-            break;
-        case LoadType::kI64Load8S:
-            Ldrsb(dst.gp().X(), src_op);
-            break;
-        case LoadType::kI32Load16U:
-        case LoadType::kI64Load16U:
-            Ldrh(dst.gp().W(), src_op);
-            break;
-        case LoadType::kI32Load16S:
-            Ldrsh(dst.gp().W(), src_op);
-            break;
-        case LoadType::kI64Load16S:
-            Ldrsh(dst.gp().X(), src_op);
-            break;
-        case LoadType::kI32Load:
-        case LoadType::kI64Load32U:
-            Ldr(dst.gp().W(), src_op);
-            break;
-        case LoadType::kI64Load32S:
-            Ldrsw(dst.gp().X(), src_op);
-            break;
-        case LoadType::kI64Load:
-            Ldr(dst.gp().X(), src_op);
-            break;
-        case LoadType::kF32Load:
-            Ldr(dst.fp().S(), src_op);
-            break;
-        case LoadType::kF64Load:
-            Ldr(dst.fp().D(), src_op);
-            break;
-        case LoadType::kS128Load:
-            Ldr(dst.fp().Q(), src_op);
-            break;
-    }
+  DCHECK(!src_op.IsPostIndex());
+  GetProtectedInstruction<LoadOrStore::kLoad> collect_protected_load(
+      this, protected_load_pc);
+
+  // Execute the actual load operation
+  switch (type.value()) {
+    case LoadType::kI32Load8U:
+    case LoadType::kI64Load8U:
+      Ldrb(dst.gp().W(), src_op);
+      break;
+    case LoadType::kI32Load8S:
+      Ldrsb(dst.gp().W(), src_op);
+      break;
+    case LoadType::kI64Load8S:
+      Ldrsb(dst.gp().X(), src_op);
+      break;
+    case LoadType::kI32Load16U:
+    case LoadType::kI64Load16U:
+      Ldrh(dst.gp().W(), src_op);
+      break;
+    case LoadType::kI32Load16S:
+      Ldrsh(dst.gp().W(), src_op);
+      break;
+    case LoadType::kI64Load16S:
+      Ldrsh(dst.gp().X(), src_op);
+      break;
+    case LoadType::kI32Load:
+    case LoadType::kI64Load32U:
+      Ldr(dst.gp().W(), src_op);
+      break;
+    case LoadType::kI64Load32S:
+      Ldrsw(dst.gp().X(), src_op);
+      break;
+    case LoadType::kI64Load:
+      Ldr(dst.gp().X(), src_op);
+      break;
+    case LoadType::kF32Load:
+      Ldr(dst.fp().S(), src_op);
+      break;
+    case LoadType::kF64Load:
+      Ldr(dst.fp().D(), src_op);
+      break;
+    case LoadType::kS128Load:
+      Ldr(dst.fp().Q(), src_op);
+      break;
+  }
 }
 
 void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
@@ -771,58 +785,60 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
                              StoreType type, LiftoffRegList /* pinned */,
                              uint32_t* protected_store_pc,
                              bool /* is_store_mem */, bool i64_offset) {
-    UseScratchRegisterScope temps(this);
-    MemOperand dst_op = liftoff::GetMemOp(this, &temps, dst_addr, offset_reg,
-                                          offset_imm, i64_offset);
-    
-    // Compute the actual memory address being written to
-    uintptr_t effective_addr = reinterpret_cast<uintptr_t>(dst_addr.code() + offset_imm);
+  UseScratchRegisterScope temps(this);
+  MemOperand dst_op = liftoff::GetMemOp(this, &temps, dst_addr, offset_reg,
+                                        offset_imm, i64_offset);
 
-    // Capture the value being stored
-    int stored_value = /* TODO: Capture value from src register */;
+  // Compute the actual memory address being written to
+  uintptr_t effective_addr =
+      reinterpret_cast<uintptr_t>(dst_addr.code() + offset_imm);
 
-    // Track the memory write
-    auto& entry = memory_accesses[effective_addr];
-    entry.num_accesses++;
+  // Capture the value being stored
+  int stored_value = src.gp().W().code();  // Capture stored value
 
-    if (entry.constant_value == std::nullopt) {
-        entry.constant_value = stored_value;
-    } else {
-        if (*entry.constant_value != stored_value) {
-            entry.constant = false;
-        }
+  // Track the memory write
+  auto& entry = memory_accesses[effective_addr];
+  entry.num_accesses++;
+
+  if (entry.constant_value == std::nullopt) {
+    entry.constant_value = stored_value;
+  } else {
+    if (*entry.constant_value != stored_value) {
+      entry.constant = false;
     }
+  }
 
-    DCHECK(!dst_op.IsPostIndex());
-    GetProtectedInstruction<LoadOrStore::kStore> collect_protected_store(this, protected_store_pc);
+  DCHECK(!dst_op.IsPostIndex());
+  GetProtectedInstruction<LoadOrStore::kStore> collect_protected_store(
+      this, protected_store_pc);
 
-    // Execute the actual store operation
-    switch (type.value()) {
-        case StoreType::kI32Store8:
-        case StoreType::kI64Store8:
-            Strb(src.gp().W(), dst_op);
-            break;
-        case StoreType::kI32Store16:
-        case StoreType::kI64Store16:
-            Strh(src.gp().W(), dst_op);
-            break;
-        case StoreType::kI32Store:
-        case StoreType::kI64Store32:
-            Str(src.gp().W(), dst_op);
-            break;
-        case StoreType::kI64Store:
-            Str(src.gp().X(), dst_op);
-            break;
-        case StoreType::kF32Store:
-            Str(src.fp().S(), dst_op);
-            break;
-        case StoreType::kF64Store:
-            Str(src.fp().D(), dst_op);
-            break;
-        case StoreType::kS128Store:
-            Str(src.fp().Q(), dst_op);
-            break;
-    }
+  // Execute the actual store operation
+  switch (type.value()) {
+    case StoreType::kI32Store8:
+    case StoreType::kI64Store8:
+      Strb(src.gp().W(), dst_op);
+      break;
+    case StoreType::kI32Store16:
+    case StoreType::kI64Store16:
+      Strh(src.gp().W(), dst_op);
+      break;
+    case StoreType::kI32Store:
+    case StoreType::kI64Store32:
+      Str(src.gp().W(), dst_op);
+      break;
+    case StoreType::kI64Store:
+      Str(src.gp().X(), dst_op);
+      break;
+    case StoreType::kF32Store:
+      Str(src.fp().S(), dst_op);
+      break;
+    case StoreType::kF64Store:
+      Str(src.fp().D(), dst_op);
+      break;
+    case StoreType::kS128Store:
+      Str(src.fp().Q(), dst_op);
+      break;
+  }
 }
 
 namespace liftoff {

@@ -5,10 +5,7 @@
 #ifndef V8_WASM_BASELINE_ARM64_LIFTOFF_ASSEMBLER_ARM64_INL_H_
 #define V8_WASM_BASELINE_ARM64_LIFTOFF_ASSEMBLER_ARM64_INL_H_
 
-#include <fmt/core.h>
-
 #include <fstream>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <unordered_map>
 
@@ -23,6 +20,12 @@
 namespace v8::internal::wasm {
 
 namespace liftoff {
+
+// Declare function prototypes with `extern`
+extern void DumpMemoryAccessStats();
+extern void TrackMemoryLoad(uintptr_t effective_addr, int loaded_value);
+extern void TrackMemoryStore(uintptr_t effective_addr, int stored_value);
+extern void LogMemoryAccess(uintptr_t address, const std::string& type, int value);
 
 // Liftoff Frames.
 //
@@ -106,14 +109,6 @@ inline CPURegister AcquireByType(UseScratchRegisterScope* temps,
       UNREACHABLE();
   }
 }
-
-struct MemoryAccessInfo {
-  uint32_t num_accesses = 0;
-  std::optional<int> constant_value = std::nullopt;
-  bool constant = true;
-};
-
-static std::unordered_map<uintptr_t, MemoryAccessInfo> memory_accesses;
 
 template <typename T>
 inline MemOperand GetMemOp(LiftoffAssembler* assm,
@@ -424,24 +419,8 @@ void LiftoffAssembler::PatchPrepareStackFrame(
   b((func_start_offset - pc_offset()) >> kInstrSizeLog2);
 }
 
-void DumpMemoryAccessStats() {
-  nlohmann::json memory_json;
-
-  for (const auto& [address, info] : memory_accesses) {
-    memory_json["memory_accesses"][fmt::format("0x{:X}", address)] = {
-        {"num_accesses", info.num_accesses}, {"constant", info.constant}};
-  }
-
-  std::ofstream file("memory_access_log.json");
-  file << memory_json.dump(2);  // Pretty-print JSON
-  file.close();
-
-  std::cout << "[MemHook] Memory access stats written to memory_access_log.json"
-            << std::endl;
-}
-
 void LiftoffAssembler::FinishCode() {
-  DumpMemoryAccessStats();
+  liftoff::DumpMemoryAccessStats();
   ForceConstantPoolEmissionWithoutJump();
 }
 
@@ -719,18 +698,8 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
       reinterpret_cast<uintptr_t>(src_addr.code() + offset_imm);
 
   // Track the memory read
-  auto& entry = memory_accesses[effective_addr];
-  entry.num_accesses++;
-
-  // Store the first read value (if not set)
-  if (entry.constant_value == std::nullopt) {
-    entry.constant_value = dst.gp().W().code();  // Capture loaded value
-  } else {
-    // If value changes, mark it as non-constant
-    if (*entry.constant_value != dst.gp().W().code()) {
-      entry.constant = false;
-    }
-  }
+  int loaded_value = dst.gp().W().code();  // Capture loaded value
+  liftoff::TrackMemoryLoad(effective_addr, loaded_value);
 
   DCHECK(!src_op.IsPostIndex());
   GetProtectedInstruction<LoadOrStore::kLoad> collect_protected_load(
@@ -795,18 +764,7 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
 
   // Capture the value being stored
   int stored_value = src.gp().W().code();  // Capture stored value
-
-  // Track the memory write
-  auto& entry = memory_accesses[effective_addr];
-  entry.num_accesses++;
-
-  if (entry.constant_value == std::nullopt) {
-    entry.constant_value = stored_value;
-  } else {
-    if (*entry.constant_value != stored_value) {
-      entry.constant = false;
-    }
-  }
+  liftoff::TrackMemoryStore(effective_addr, stored_value);
 
   DCHECK(!dst_op.IsPostIndex());
   GetProtectedInstruction<LoadOrStore::kStore> collect_protected_store(

@@ -547,7 +547,7 @@
       'include_dirs': [
         'src',
         'deps/v8/include',
-        'deps/postject'
+        'deps/postject',
       ],
 
       'sources': [

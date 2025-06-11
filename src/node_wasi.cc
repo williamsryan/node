@@ -11,6 +11,9 @@
 #include "uv.h"
 #include "uvwasi.h"
 
+// Extra instrumentation for Wasm-V
+#include "tracing/trace_event.h"
+
 namespace node {
 namespace wasi {
 
@@ -25,6 +28,10 @@ inline void Debug(const WASI& wasi, Args&&... args) {
       return UVWASI_EOVERFLOW;                                                 \
     }                                                                          \
   } while (0)
+
+#define TRACE_WASI_CALL(syscall_name)                                          \
+  TRACE_EVENT_INSTANT1(                                                        \
+      "wasi", "syscall", TRACE_EVENT_SCOPE_THREAD, "syscall", syscall_name)
 
 using v8::Array;
 using v8::ArrayBuffer;
@@ -64,9 +71,8 @@ static MaybeLocal<Value> WASIException(Local<Context> context,
   if (!Exception::Error(js_msg)->ToObject(context).ToLocal(&e))
     return MaybeLocal<Value>();
 
-  if (e->Set(context,
-             env->errno_string(),
-             Integer::New(isolate, errorno)).IsNothing() ||
+  if (e->Set(context, env->errno_string(), Integer::New(isolate, errorno))
+          .IsNothing() ||
       e->Set(context, env->code_string(), js_code).IsNothing() ||
       e->Set(context, env->syscall_string(), js_syscall).IsNothing()) {
     return MaybeLocal<Value>();
@@ -75,10 +81,8 @@ static MaybeLocal<Value> WASIException(Local<Context> context,
   return e;
 }
 
-
-WASI::WASI(Environment* env,
-           Local<Object> object,
-           uvwasi_options_t* options) : BaseObject(env, object) {
+WASI::WASI(Environment* env, Local<Object> object, uvwasi_options_t* options)
+    : BaseObject(env, object) {
   MakeWeak();
   alloc_info_ = MakeAllocator();
   options->allocator = &alloc_info_;
@@ -91,7 +95,6 @@ WASI::WASI(Environment* env,
     env->isolate()->ThrowException(exception);
   }
 }
-
 
 WASI::~WASI() {
   uvwasi_destroy(&uvw_);
@@ -134,17 +137,17 @@ void WASI::New(const FunctionCallbackInfo<Value>& args) {
 
   Local<Array> stdio = args[3].As<Array>();
   CHECK_EQ(stdio->Length(), 3);
-  options.in = stdio->Get(context, 0).ToLocalChecked()->
-    Int32Value(context).FromJust();
-  options.out = stdio->Get(context, 1).ToLocalChecked()->
-    Int32Value(context).FromJust();
-  options.err = stdio->Get(context, 2).ToLocalChecked()->
-    Int32Value(context).FromJust();
+  options.in =
+      stdio->Get(context, 0).ToLocalChecked()->Int32Value(context).FromJust();
+  options.out =
+      stdio->Get(context, 1).ToLocalChecked()->Int32Value(context).FromJust();
+  options.err =
+      stdio->Get(context, 2).ToLocalChecked()->Int32Value(context).FromJust();
 
   options.fd_table_size = 3;
   options.argc = argc;
   options.argv =
-    const_cast<const char**>(argc == 0 ? nullptr : new char*[argc]);
+      const_cast<const char**>(argc == 0 ? nullptr : new char*[argc]);
 
   for (uint32_t i = 0; i < argc; i++) {
     auto arg = argv->Get(context, i).ToLocalChecked();
@@ -402,6 +405,7 @@ uint32_t WASI::ArgsGet(WASI& wasi,
                        uint32_t argv_offset,
                        uint32_t argv_buf_offset) {
   Debug(wasi, "args_get(%d, %d)\n", argv_offset, argv_buf_offset);
+  TRACE_WASI_CALL("__syscall_args_get");
 
   CHECK_BOUNDS_OR_RETURN(memory.size, argv_buf_offset, wasi.uvw_.argv_buf_size);
   CHECK_BOUNDS_OR_RETURN(
@@ -427,6 +431,7 @@ uint32_t WASI::ArgsSizesGet(WASI& wasi,
                             uint32_t argc_offset,
                             uint32_t argv_buf_offset) {
   Debug(wasi, "args_sizes_get(%d, %d)\n", argc_offset, argv_buf_offset);
+  TRACE_WASI_CALL("__syscall_args_sizes_get");
   CHECK_BOUNDS_OR_RETURN(memory.size, argc_offset, UVWASI_SERDES_SIZE_size_t);
   CHECK_BOUNDS_OR_RETURN(
       memory.size, argv_buf_offset, UVWASI_SERDES_SIZE_size_t);
@@ -446,6 +451,7 @@ uint32_t WASI::ClockResGet(WASI& wasi,
                            uint32_t clock_id,
                            uint32_t resolution_ptr) {
   Debug(wasi, "clock_res_get(%d, %d)\n", clock_id, resolution_ptr);
+  TRACE_WASI_CALL("__syscall_clock_getres");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, resolution_ptr, UVWASI_SERDES_SIZE_timestamp_t);
   uvwasi_timestamp_t resolution;
@@ -462,6 +468,7 @@ uint32_t WASI::ClockTimeGet(WASI& wasi,
                             uint64_t precision,
                             uint32_t time_ptr) {
   Debug(wasi, "clock_time_get(%d, %d, %d)\n", clock_id, precision, time_ptr);
+  TRACE_WASI_CALL("__syscall_clock_gettime");
   CHECK_BOUNDS_OR_RETURN(memory.size, time_ptr, UVWASI_SERDES_SIZE_timestamp_t);
   uvwasi_timestamp_t time;
   uvwasi_errno_t err =
@@ -477,6 +484,7 @@ uint32_t WASI::EnvironGet(WASI& wasi,
                           uint32_t environ_offset,
                           uint32_t environ_buf_offset) {
   Debug(wasi, "environ_get(%d, %d)\n", environ_offset, environ_buf_offset);
+  TRACE_WASI_CALL("__syscall_environ_get");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, environ_buf_offset, wasi.uvw_.env_buf_size);
   CHECK_BOUNDS_OR_RETURN(memory.size,
@@ -507,6 +515,7 @@ uint32_t WASI::EnvironSizesGet(WASI& wasi,
                                uint32_t envc_offset,
                                uint32_t env_buf_offset) {
   Debug(wasi, "environ_sizes_get(%d, %d)\n", envc_offset, env_buf_offset);
+  TRACE_WASI_CALL("__syscall_environ_sizes_get");
   CHECK_BOUNDS_OR_RETURN(memory.size, envc_offset, UVWASI_SERDES_SIZE_size_t);
   CHECK_BOUNDS_OR_RETURN(
       memory.size, env_buf_offset, UVWASI_SERDES_SIZE_size_t);
@@ -529,22 +538,26 @@ uint32_t WASI::FdAdvise(WASI& wasi,
                         uint64_t len,
                         uint32_t advice) {
   Debug(wasi, "fd_advise(%d, %d, %d, %d)\n", fd, offset, len, advice);
+  TRACE_WASI_CALL("__syscall_fadvise64");
   return uvwasi_fd_advise(&wasi.uvw_, fd, offset, len, advice);
 }
 
 uint32_t WASI::FdAllocate(
     WASI& wasi, WasmMemory, uint32_t fd, uint64_t offset, uint64_t len) {
   Debug(wasi, "fd_allocate(%d, %d, %d)\n", fd, offset, len);
+  TRACE_WASI_CALL("__syscall_fallocate");
   return uvwasi_fd_allocate(&wasi.uvw_, fd, offset, len);
 }
 
 uint32_t WASI::FdClose(WASI& wasi, WasmMemory, uint32_t fd) {
   Debug(wasi, "fd_close(%d)\n", fd);
+  TRACE_WASI_CALL("__syscall_close");
   return uvwasi_fd_close(&wasi.uvw_, fd);
 }
 
 uint32_t WASI::FdDatasync(WASI& wasi, WasmMemory, uint32_t fd) {
   Debug(wasi, "fd_datasync(%d)\n", fd);
+  TRACE_WASI_CALL("__syscall_fdatasync");
   return uvwasi_fd_datasync(&wasi.uvw_, fd);
 }
 
@@ -553,6 +566,7 @@ uint32_t WASI::FdFdstatGet(WASI& wasi,
                            uint32_t fd,
                            uint32_t buf) {
   Debug(wasi, "fd_fdstat_get(%d, %d)\n", fd, buf);
+  TRACE_WASI_CALL("__syscall_fcntl");
   CHECK_BOUNDS_OR_RETURN(memory.size, buf, UVWASI_SERDES_SIZE_fdstat_t);
   uvwasi_fdstat_t stats;
   uvwasi_errno_t err = uvwasi_fd_fdstat_get(&wasi.uvw_, fd, &stats);
@@ -568,6 +582,7 @@ uint32_t WASI::FdFdstatSetFlags(WASI& wasi,
                                 uint32_t fd,
                                 uint32_t flags) {
   Debug(wasi, "fd_fdstat_set_flags(%d, %d)\n", fd, flags);
+  TRACE_WASI_CALL("__syscall_fcntl");
   return uvwasi_fd_fdstat_set_flags(&wasi.uvw_, fd, flags);
 }
 
@@ -581,6 +596,7 @@ uint32_t WASI::FdFdstatSetRights(WASI& wasi,
         fd,
         fs_rights_base,
         fs_rights_inheriting);
+  TRACE_WASI_CALL("__syscall_fcntl");
   return uvwasi_fd_fdstat_set_rights(
       &wasi.uvw_, fd, fs_rights_base, fs_rights_inheriting);
 }
@@ -590,6 +606,7 @@ uint32_t WASI::FdFilestatGet(WASI& wasi,
                              uint32_t fd,
                              uint32_t buf) {
   Debug(wasi, "fd_filestat_get(%d, %d)\n", fd, buf);
+  TRACE_WASI_CALL("__syscall_fstat");
   CHECK_BOUNDS_OR_RETURN(memory.size, buf, UVWASI_SERDES_SIZE_filestat_t);
   uvwasi_filestat_t stats;
   uvwasi_errno_t err = uvwasi_fd_filestat_get(&wasi.uvw_, fd, &stats);
@@ -605,6 +622,7 @@ uint32_t WASI::FdFilestatSetSize(WASI& wasi,
                                  uint32_t fd,
                                  uint64_t st_size) {
   Debug(wasi, "fd_filestat_set_size(%d, %d)\n", fd, st_size);
+  TRACE_WASI_CALL("__syscall_ftruncate");
   return uvwasi_fd_filestat_set_size(&wasi.uvw_, fd, st_size);
 }
 
@@ -620,6 +638,7 @@ uint32_t WASI::FdFilestatSetTimes(WASI& wasi,
         st_atim,
         st_mtim,
         fst_flags);
+  TRACE_WASI_CALL("__syscall_futimens");
   return uvwasi_fd_filestat_set_times(
       &wasi.uvw_, fd, st_atim, st_mtim, fst_flags);
 }
@@ -638,6 +657,7 @@ uint32_t WASI::FdPread(WASI& wasi,
         iovs_len,
         offset,
         nread_ptr);
+  TRACE_WASI_CALL("__syscall_pread64");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, iovs_ptr, iovs_len * UVWASI_SERDES_SIZE_iovec_t);
   CHECK_BOUNDS_OR_RETURN(memory.size, nread_ptr, UVWASI_SERDES_SIZE_size_t);
@@ -663,6 +683,7 @@ uint32_t WASI::FdPrestatGet(WASI& wasi,
                             uint32_t fd,
                             uint32_t buf) {
   Debug(wasi, "fd_prestat_get(%d, %d)\n", fd, buf);
+  TRACE_WASI_CALL("__syscall_fcntl");
   CHECK_BOUNDS_OR_RETURN(memory.size, buf, UVWASI_SERDES_SIZE_prestat_t);
   uvwasi_prestat_t prestat;
   uvwasi_errno_t err = uvwasi_fd_prestat_get(&wasi.uvw_, fd, &prestat);
@@ -679,6 +700,7 @@ uint32_t WASI::FdPrestatDirName(WASI& wasi,
                                 uint32_t path_ptr,
                                 uint32_t path_len) {
   Debug(wasi, "fd_prestat_dir_name(%d, %d, %d)\n", fd, path_ptr, path_len);
+  TRACE_WASI_CALL("__syscall_fcntl");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   return uvwasi_fd_prestat_dir_name(
       &wasi.uvw_, fd, &memory.data[path_ptr], path_len);
@@ -698,6 +720,7 @@ uint32_t WASI::FdPwrite(WASI& wasi,
         iovs_len,
         offset,
         nwritten_ptr);
+  TRACE_WASI_CALL("__syscall_pwrite64");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, iovs_ptr, iovs_len * UVWASI_SERDES_SIZE_ciovec_t);
   CHECK_BOUNDS_OR_RETURN(memory.size, nwritten_ptr, UVWASI_SERDES_SIZE_size_t);
@@ -726,6 +749,7 @@ uint32_t WASI::FdRead(WASI& wasi,
                       uint32_t iovs_len,
                       uint32_t nread_ptr) {
   Debug(wasi, "fd_read(%d, %d, %d, %d)\n", fd, iovs_ptr, iovs_len, nread_ptr);
+  TRACE_WASI_CALL("__syscall_read");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, iovs_ptr, iovs_len * UVWASI_SERDES_SIZE_iovec_t);
   CHECK_BOUNDS_OR_RETURN(memory.size, nread_ptr, UVWASI_SERDES_SIZE_size_t);
@@ -760,6 +784,7 @@ uint32_t WASI::FdReaddir(WASI& wasi,
         buf_len,
         cookie,
         bufused_ptr);
+  TRACE_WASI_CALL("__syscall_getdents64");
   CHECK_BOUNDS_OR_RETURN(memory.size, buf_ptr, buf_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, bufused_ptr, UVWASI_SERDES_SIZE_size_t);
   uvwasi_size_t bufused;
@@ -773,6 +798,7 @@ uint32_t WASI::FdReaddir(WASI& wasi,
 
 uint32_t WASI::FdRenumber(WASI& wasi, WasmMemory, uint32_t from, uint32_t to) {
   Debug(wasi, "fd_renumber(%d, %d)\n", from, to);
+  TRACE_WASI_CALL("__syscall_dup2");
   return uvwasi_fd_renumber(&wasi.uvw_, from, to);
 }
 
@@ -783,6 +809,7 @@ uint32_t WASI::FdSeek(WASI& wasi,
                       uint32_t whence,
                       uint32_t newoffset_ptr) {
   Debug(wasi, "fd_seek(%d, %d, %d, %d)\n", fd, offset, whence, newoffset_ptr);
+  TRACE_WASI_CALL("__syscall_lseek");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, newoffset_ptr, UVWASI_SERDES_SIZE_filesize_t);
   uvwasi_filesize_t newoffset;
@@ -796,6 +823,7 @@ uint32_t WASI::FdSeek(WASI& wasi,
 
 uint32_t WASI::FdSync(WASI& wasi, WasmMemory, uint32_t fd) {
   Debug(wasi, "fd_sync(%d)\n", fd);
+  TRACE_WASI_CALL("__syscall_fsync");
   return uvwasi_fd_sync(&wasi.uvw_, fd);
 }
 
@@ -804,6 +832,7 @@ uint32_t WASI::FdTell(WASI& wasi,
                       uint32_t fd,
                       uint32_t offset_ptr) {
   Debug(wasi, "fd_tell(%d, %d)\n", fd, offset_ptr);
+  TRACE_WASI_CALL("__syscall_lseek");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, offset_ptr, UVWASI_SERDES_SIZE_filesize_t);
   uvwasi_filesize_t offset;
@@ -821,12 +850,11 @@ uint32_t WASI::FdWrite(WASI& wasi,
                        uint32_t iovs_ptr,
                        uint32_t iovs_len,
                        uint32_t nwritten_ptr) {
-  Debug(wasi,
-        "fd_write(%d, %d, %d, %d)\n",
-        fd,
-        iovs_ptr,
-        iovs_len,
-        nwritten_ptr);
+  Debug(
+      wasi, "fd_write(%d, %d, %d, %d)\n", fd, iovs_ptr, iovs_len, nwritten_ptr);
+
+  TRACE_WASI_CALL("__syscall_write");
+
   CHECK_BOUNDS_OR_RETURN(
       memory.size, iovs_ptr, iovs_len * UVWASI_SERDES_SIZE_ciovec_t);
   CHECK_BOUNDS_OR_RETURN(memory.size, nwritten_ptr, UVWASI_SERDES_SIZE_size_t);
@@ -853,6 +881,7 @@ uint32_t WASI::PathCreateDirectory(WASI& wasi,
                                    uint32_t path_ptr,
                                    uint32_t path_len) {
   Debug(wasi, "path_create_directory(%d, %d, %d)\n", fd, path_ptr, path_len);
+  TRACE_WASI_CALL("__syscall_mkdirat");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   uvwasi_errno_t err = uvwasi_path_create_directory(
       &wasi.uvw_, fd, &memory.data[path_ptr], path_len);
@@ -866,11 +895,8 @@ uint32_t WASI::PathFilestatGet(WASI& wasi,
                                uint32_t path_ptr,
                                uint32_t path_len,
                                uint32_t buf_ptr) {
-  Debug(wasi,
-        "path_filestat_get(%d, %d, %d)\n",
-        fd,
-        path_ptr,
-        path_len);
+  Debug(wasi, "path_filestat_get(%d, %d, %d)\n", fd, path_ptr, path_len);
+  TRACE_WASI_CALL("__syscall_newfstatat");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, buf_ptr, UVWASI_SERDES_SIZE_filestat_t);
   uvwasi_filestat_t stats;
@@ -900,6 +926,7 @@ uint32_t WASI::PathFilestatSetTimes(WASI& wasi,
         st_atim,
         st_mtim,
         fst_flags);
+  TRACE_WASI_CALL("__syscall_utimensat");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   return uvwasi_path_filestat_set_times(&wasi.uvw_,
                                         fd,
@@ -929,6 +956,7 @@ uint32_t WASI::PathLink(WASI& wasi,
         new_fd,
         new_path_ptr,
         new_path_len);
+  TRACE_WASI_CALL("__syscall_linkat");
   CHECK_BOUNDS_OR_RETURN(memory.size, old_path_ptr, old_path_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, new_path_ptr, new_path_len);
   return uvwasi_path_link(&wasi.uvw_,
@@ -963,6 +991,8 @@ uint32_t WASI::PathOpen(WASI& wasi,
         fs_rights_inheriting,
         fs_flags,
         fd_ptr);
+  TRACE_WASI_CALL("__syscall_openat");
+
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, fd_ptr, UVWASI_SERDES_SIZE_fd_t);
   uvwasi_fd_t fd;
@@ -998,6 +1028,7 @@ uint32_t WASI::PathReadlink(WASI& wasi,
         buf_ptr,
         buf_len,
         bufused_ptr);
+  TRACE_WASI_CALL("__syscall_readlinkat");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, buf_ptr, buf_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, bufused_ptr, UVWASI_SERDES_SIZE_size_t);
@@ -1021,6 +1052,7 @@ uint32_t WASI::PathRemoveDirectory(WASI& wasi,
                                    uint32_t path_ptr,
                                    uint32_t path_len) {
   Debug(wasi, "path_remove_directory(%d, %d, %d)\n", fd, path_ptr, path_len);
+  TRACE_WASI_CALL("__syscall_unlinkat");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   return uvwasi_path_remove_directory(
       &wasi.uvw_, fd, &memory.data[path_ptr], path_len);
@@ -1042,6 +1074,7 @@ uint32_t WASI::PathRename(WASI& wasi,
         new_fd,
         new_path_ptr,
         new_path_len);
+  TRACE_WASI_CALL("__syscall_renameat");
   CHECK_BOUNDS_OR_RETURN(memory.size, old_path_ptr, old_path_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, new_path_ptr, new_path_len);
   return uvwasi_path_rename(&wasi.uvw_,
@@ -1067,6 +1100,7 @@ uint32_t WASI::PathSymlink(WASI& wasi,
         fd,
         new_path_ptr,
         new_path_len);
+  TRACE_WASI_CALL("__syscall_symlinkat");
   CHECK_BOUNDS_OR_RETURN(memory.size, old_path_ptr, old_path_len);
   CHECK_BOUNDS_OR_RETURN(memory.size, new_path_ptr, new_path_len);
   return uvwasi_path_symlink(&wasi.uvw_,
@@ -1083,6 +1117,7 @@ uint32_t WASI::PathUnlinkFile(WASI& wasi,
                               uint32_t path_ptr,
                               uint32_t path_len) {
   Debug(wasi, "path_unlink_file(%d, %d, %d)\n", fd, path_ptr, path_len);
+  TRACE_WASI_CALL("__syscall_unlinkat");
   CHECK_BOUNDS_OR_RETURN(memory.size, path_ptr, path_len);
   return uvwasi_path_unlink_file(
       &wasi.uvw_, fd, &memory.data[path_ptr], path_len);
@@ -1100,6 +1135,7 @@ uint32_t WASI::PollOneoff(WASI& wasi,
         out_ptr,
         nsubscriptions,
         nevents_ptr);
+  TRACE_WASI_CALL("__syscall_ppoll");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, in_ptr, nsubscriptions * UVWASI_SERDES_SIZE_subscription_t);
   CHECK_BOUNDS_OR_RETURN(
@@ -1130,11 +1166,13 @@ uint32_t WASI::PollOneoff(WASI& wasi,
 
 void WASI::ProcExit(WASI& wasi, WasmMemory, uint32_t code) {
   Debug(wasi, "proc_exit(%d)\n", code);
+  TRACE_WASI_CALL("__syscall_exit_group");
   uvwasi_proc_exit(&wasi.uvw_, code);
 }
 
 uint32_t WASI::ProcRaise(WASI& wasi, WasmMemory, uint32_t sig) {
   Debug(wasi, "proc_raise(%d)\n", sig);
+  TRACE_WASI_CALL("__syscall_kill");
   return uvwasi_proc_raise(&wasi.uvw_, sig);
 }
 
@@ -1143,12 +1181,14 @@ uint32_t WASI::RandomGet(WASI& wasi,
                          uint32_t buf_ptr,
                          uint32_t buf_len) {
   Debug(wasi, "random_get(%d, %d)\n", buf_ptr, buf_len);
+  TRACE_WASI_CALL("__syscall_getrandom");
   CHECK_BOUNDS_OR_RETURN(memory.size, buf_ptr, buf_len);
   return uvwasi_random_get(&wasi.uvw_, &memory.data[buf_ptr], buf_len);
 }
 
 uint32_t WASI::SchedYield(WASI& wasi, WasmMemory) {
   Debug(wasi, "sched_yield()\n");
+  TRACE_WASI_CALL("__syscall_sched_yield");
   return uvwasi_sched_yield(&wasi.uvw_);
 }
 
@@ -1158,6 +1198,9 @@ uint32_t WASI::SockAccept(WASI& wasi,
                           uint32_t flags,
                           uint32_t fd_ptr) {
   Debug(wasi, "sock_accept(%d, %d, %d)\n", sock, flags, fd_ptr);
+
+  TRACE_WASI_CALL("__syscall_accept4");
+
   uvwasi_fd_t fd;
   uvwasi_errno_t err = uvwasi_sock_accept(&wasi.uvw_, sock, flags, &fd);
 
@@ -1183,6 +1226,7 @@ uint32_t WASI::SockRecv(WASI& wasi,
         ri_flags,
         ro_datalen_ptr,
         ro_flags_ptr);
+  TRACE_WASI_CALL("__syscall_recvfrom");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, ri_data_ptr, ri_data_len * UVWASI_SERDES_SIZE_iovec_t);
   CHECK_BOUNDS_OR_RETURN(memory.size, ro_datalen_ptr, 4);
@@ -1225,6 +1269,7 @@ uint32_t WASI::SockSend(WASI& wasi,
         si_data_len,
         si_flags,
         so_datalen_ptr);
+  TRACE_WASI_CALL("__syscall_sendto");
   CHECK_BOUNDS_OR_RETURN(
       memory.size, si_data_ptr, si_data_len * UVWASI_SERDES_SIZE_ciovec_t);
   CHECK_BOUNDS_OR_RETURN(
@@ -1250,6 +1295,7 @@ uint32_t WASI::SockShutdown(WASI& wasi,
                             uint32_t sock,
                             uint32_t how) {
   Debug(wasi, "sock_shutdown(%d, %d)\n", sock, how);
+  TRACE_WASI_CALL("__syscall_shutdown");
   return uvwasi_sock_shutdown(&wasi.uvw_, sock, how);
 }
 

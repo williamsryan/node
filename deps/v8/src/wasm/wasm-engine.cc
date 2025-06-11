@@ -35,6 +35,8 @@
 #include "src/wasm/wasm-limits.h"
 #include "src/wasm/wasm-objects-inl.h"
 
+#include "src/tracing/trace_event.h"
+
 #ifdef V8_ENABLE_WASM_GDB_REMOTE_DEBUGGING
 #include "src/debug/wasm/gdb-server/gdb-server.h"
 #endif  // V8_ENABLE_WASM_GDB_REMOTE_DEBUGGING

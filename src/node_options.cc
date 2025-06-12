@@ -369,6 +369,12 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
             "Allow loading explicit ES Modules in require().",
             &EnvironmentOptions::require_module,
             kAllowedInEnvvar);
+  AddOption("--enable-wasm-memory-hooks",
+            "enable WASM memory access hooks for debugging",
+            &EnvironmentOptions::enable_wasm_memory_hooks);
+  AddOption("--enable-wasm-function-trace", 
+          "enable WASM function call tracing for debugging",
+          &EnvironmentOptions::enable_wasm_function_trace);
   AddOption("--diagnostic-dir",
             "set dir for all output files"
             " (default: current working directory)",

@@ -4,6 +4,9 @@
 
 #include "src/wasm/wasm-objects.h"
 
+#include "src/wasm/baseline/liftoff-call-tracer.h"
+#include "src/wasm/baseline/liftoff-memory-tracker.h"
+
 #include "src/base/iterator.h"
 #include "src/base/vector.h"
 #include "src/builtins/builtins-inl.h"
@@ -39,6 +42,11 @@
   do {                              \
     if (false) PrintF(__VA_ARGS__); \
   } while (false)
+
+// Add WASM function call tracing
+#define TRACE_WASM_CALL(caller, callee)                                   \
+  TRACE_EVENT_INSTANT2("wasm", "function_call", TRACE_EVENT_SCOPE_THREAD, \
+                       "caller", caller, "callee", callee)
 
 namespace v8 {
 namespace internal {
@@ -1372,6 +1380,32 @@ void WasmTrustedInstanceData::InitDataSegmentArrays(
 Address WasmTrustedInstanceData::GetCallTarget(uint32_t func_index) {
   wasm::NativeModule* native_module = this->native_module();
   SBXCHECK_BOUNDS(func_index, native_module->num_functions());
+  
+  // Add function call tracing
+  const WasmModule* module = native_module->module();
+  if (func_index < module->functions.size()) {
+    // Get function name for tracing
+    base::Vector<const uint8_t> wire_bytes = native_module->wire_bytes();
+    wasm::ModuleWireBytes module_bytes(wire_bytes);
+    wasm::WireBytesRef name_ref = module->lazily_generated_names.LookupFunctionName(
+        module_bytes, func_index);
+    
+    std::string func_name;
+    if (name_ref.is_set()) {
+      wasm::WasmName name = module_bytes.GetNameOrNull(name_ref);
+      if (!name.empty()) {
+        func_name = std::string(reinterpret_cast<const char*>(name.begin()), name.size());
+      }
+    }
+    
+    if (func_name.empty()) {
+      func_name = "func_" + std::to_string(func_index);
+    }
+    
+    // Trace the function call
+    v8::internal::wasm::liftoff::CallTracer::TraceFunctionEntry(func_name);
+  }
+  
   if (func_index < native_module->num_imported_functions()) {
     return dispatch_table_for_imports()->target(func_index);
   }
@@ -1945,6 +1979,7 @@ const wasm::FunctionSig* WasmCapiFunction::GetSignature(Zone* zone) const {
       zone, function_data->serialized_signature());
 }
 
+// In the WasmDispatchTable::Set method, add runtime tracing:
 void WasmDispatchTable::Set(int index, Tagged<Object> ref, Address call_target,
                             int sig_id) {
   if (ref == Smi::zero()) {
@@ -1956,10 +1991,38 @@ void WasmDispatchTable::Set(int index, Tagged<Object> ref, Address call_target,
   SBXCHECK_BOUNDS(index, length());
   DCHECK(IsWasmApiFunctionRef(ref) || IsWasmTrustedInstanceData(ref));
   DCHECK_EQ(ref == Smi::zero(), call_target == kNullAddress);
+  
+  // Add runtime call tracing hook
+  if (IsWasmTrustedInstanceData(ref)) {
+    auto instance_data = Cast<WasmTrustedInstanceData>(ref);
+    const WasmModule* module = instance_data->module();
+    if (index < static_cast<int>(module->functions.size())) {
+      // Get function name for tracing
+      base::Vector<const uint8_t> wire_bytes = instance_data->native_module()->wire_bytes();
+      wasm::ModuleWireBytes module_bytes(wire_bytes);
+      wasm::WireBytesRef name_ref = module->lazily_generated_names.LookupFunctionName(
+          module_bytes, index);
+      
+      std::string func_name;
+      if (name_ref.is_set()) {
+        wasm::WasmName name = module_bytes.GetNameOrNull(name_ref);
+        if (!name.empty()) {
+          func_name = std::string(reinterpret_cast<const char*>(name.begin()), name.size());
+        }
+      }
+      
+      if (func_name.empty()) {
+        func_name = "func_" + std::to_string(index);
+      }
+      
+      // Log the function setup for runtime dispatch
+      v8::internal::wasm::liftoff::CallTracer::RegisterFunction(index, func_name, call_target);
+    }
+  }
+  
   const int offset = OffsetOf(index);
   WriteProtectedPointerField(offset + kRefBias, Cast<TrustedObject>(ref));
-  CONDITIONAL_WRITE_BARRIER(*this, offset + kRefBias, ref,
-                            UPDATE_WRITE_BARRIER);
+  CONDITIONAL_WRITE_BARRIER(*this, offset + kRefBias, ref, UPDATE_WRITE_BARRIER);
   WriteField<Address>(offset + kTargetBias, call_target);
   WriteField<int>(offset + kSigBias, sig_id);
 }

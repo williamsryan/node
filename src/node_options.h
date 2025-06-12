@@ -113,6 +113,8 @@ class DebugOptions : public Options {
 
 class EnvironmentOptions : public Options {
  public:
+  bool enable_wasm_memory_hooks = false;
+  bool enable_wasm_function_trace = false;
   bool abort_on_uncaught_exception = false;
   std::vector<std::string> conditions;
   bool detect_module = true;

@@ -30,8 +30,11 @@ inline void Debug(const WASI& wasi, Args&&... args) {
   } while (0)
 
 #define TRACE_WASI_CALL(syscall_name)                                          \
-  TRACE_EVENT_INSTANT1(                                                        \
-      "wasi", "syscall", TRACE_EVENT_SCOPE_THREAD, "syscall", syscall_name)
+  do {                                                                         \
+    printf("WASI_TRACE: %s\n", syscall_name);                                \
+    TRACE_EVENT_INSTANT1(                                                     \
+        "wasi", "syscall", TRACE_EVENT_SCOPE_THREAD, "syscall", syscall_name);\
+  } while(0)
 
 using v8::Array;
 using v8::ArrayBuffer;

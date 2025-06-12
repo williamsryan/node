@@ -1432,6 +1432,12 @@ static ExitCode StartInternal(int argc, char** argv) {
   // Hack around with the argv pointer. Used for process.title = "blah".
   argv = uv_setup_args(argc, argv);
 
+  for (int i = 0; i < argc; i++) {
+    if (strstr(argv[i], "trace-event")) {
+      printf("DEBUG: Found trace argument: %s\n", argv[i]);
+    }
+  }
+
   std::shared_ptr<InitializationResultImpl> result =
       InitializeOncePerProcessInternal(
           std::vector<std::string>(argv, argv + argc));

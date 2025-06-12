@@ -2803,7 +2803,7 @@ class LiftoffCompiler {
   void ReturnImpl(FullDecoder* decoder) {
     if (V8_UNLIKELY(v8_flags.trace_wasm)) TraceFunctionExit(decoder);
 
-    // ADD YOUR ENHANCED TRACING:
+    // ADD ENHANCED TRACING:
     if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
       std::string current_func =
           v8::internal::wasm::liftoff::CallTracer::GetCurrentFunction();
@@ -8164,9 +8164,7 @@ class LiftoffCompiler {
                   const Value args[], Value returns[], TailCall tail_call) {
     // ADD RUNTIME CALL TRACING:
     if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
-      std::string func_name =
-          v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(
-              imm.index);
+      std::string func_name = "func_" + std::to_string(imm.index);
 
       if (imm.index < env_->module->num_imported_functions) {
         // Import call

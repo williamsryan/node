@@ -29,6 +29,8 @@
 #include "src/wasm/wasm-subtyping.h"
 #include "src/wasm/wasm-value.h"
 
+#include "src/wasm/baseline/liftoff-call-tracer.h"
+
 namespace v8 {
 namespace internal {
 
@@ -2005,6 +2007,26 @@ RUNTIME_FUNCTION(Runtime_WasmStringHash) {
   Tagged<String> string(Cast<String>(args[0]));
   uint32_t hash = string->EnsureHash();
   return Smi::FromInt(static_cast<int>(hash));
+}
+
+// Custom executio ntracing stuff.
+RUNTIME_FUNCTION(Runtime_WasmTraceImportCall) {
+  HandleScope scope(isolate);
+  DCHECK_EQ(0, args.length());  // No arguments needed for basic tracing
+  
+  if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
+    // Get the current WASM frame to identify the caller
+    StackFrameIterator it(isolate);
+    if (it.frame()->is_wasm()) {
+      WasmFrame* wasm_frame = WasmFrame::cast(it.frame());
+      int func_index = wasm_frame->function_index();
+      
+      std::string caller = "func_" + std::to_string(func_index);
+      std::cout << "[IMPORT_RUNTIME] " << caller << " calling JavaScript function" << std::endl;
+    }
+  }
+  
+  return ReadOnlyRoots(isolate).undefined_value();
 }
 
 }  // namespace internal

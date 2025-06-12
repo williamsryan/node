@@ -1141,7 +1141,18 @@ Tagged<Object> ImportedFunctionEntry::object_ref() {
 }
 
 Address ImportedFunctionEntry::target() {
-  return instance_data_->dispatch_table_for_imports()->target(index_);
+  Address target_addr = instance_data_->dispatch_table_for_imports()->target(index_);
+  
+  // ADD SIMPLE RUNTIME TRACING:
+  if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
+    std::string caller = v8::internal::wasm::liftoff::CallTracer::GetCurrentFunction();
+    std::string import_name = "import_" + std::to_string(index_);
+    
+    std::cout << "[IMPORT_CALL] " << caller << " → " << import_name 
+              << " (target: 0x" << std::hex << target_addr << std::dec << ")" << std::endl;
+  }
+  
+  return target_addr;
 }
 
 void ImportedFunctionEntry::set_target(Address new_target) {

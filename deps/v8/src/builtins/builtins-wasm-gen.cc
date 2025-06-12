@@ -4,6 +4,8 @@
 
 #include "src/builtins/builtins-wasm-gen.h"
 
+#include "src/wasm/baseline/liftoff-call-tracer.h"
+
 #include "src/builtins/builtins-utils-gen.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/interface-descriptors.h"
@@ -160,6 +162,13 @@ TF_BUILTIN(JSToWasmLazyDeoptContinuation, WasmBuiltinsAssembler) {
 }
 
 TF_BUILTIN(WasmToJsWrapperCSA, WasmBuiltinsAssembler) {
+  // ADD TRACING AT THE START:
+  if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
+    // This is complex because it's in CodeStubAssembler (CSA) context
+    // You'd need to call a runtime function to do the tracing
+    CallRuntime(Runtime::kWasmTraceImportCall, NoContextConstant());
+  }
+
   TorqueStructWasmToJSResult result = WasmToJSWrapper(
       UncheckedParameter<WasmApiFunctionRef>(Descriptor::kWasmApiFunctionRef));
   PopAndReturn(result.popCount, result.result0, result.result1, result.result2,

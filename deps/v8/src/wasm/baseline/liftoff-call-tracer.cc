@@ -25,6 +25,8 @@ bool CallTracer::ShouldTrace() {
 
 void CallTracer::RegisterFunction(uint32_t index, const std::string& name, uintptr_t target) {
   if (!ShouldTrace()) return;
+
+  // std::cout << "[DEBUG] RegisterFunction: index=" << index << ", name=" << name << std::endl;
   
   function_names_[target] = name;
   function_index_to_name_[index] = name;
@@ -34,6 +36,8 @@ void CallTracer::RegisterFunction(uint32_t index, const std::string& name, uintp
 
 void CallTracer::TraceRuntimeCall(uintptr_t target) {
   if (!ShouldTrace()) return;
+
+  std::cout << "[WASM_TRACE] Runtime call to target: 0x" << std::hex << target << std::dec << std::endl;
   
   auto it = function_names_.find(target);
   if (it != function_names_.end()) {
@@ -45,6 +49,8 @@ void CallTracer::TraceRuntimeCall(uintptr_t target) {
 
 void CallTracer::TraceRuntimeCall(const std::string& function_name) {
   if (!ShouldTrace()) return;
+
+  std::cout << "[WASM_TRACE] Runtime call: " << function_name << std::endl;
   
   std::string caller = call_stack_.empty() ? "ENTRY" : call_stack_.back();
   std::cout << caller << " → " << function_name << std::endl;

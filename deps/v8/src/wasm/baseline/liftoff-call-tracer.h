@@ -12,13 +12,10 @@ namespace v8::internal::wasm {
 namespace liftoff {
 
 class CallTracer {
-private:
-  static thread_local std::vector<std::string> call_stack_;
-  static std::unordered_map<uintptr_t, std::string> function_names_;
-  static std::unordered_map<uint32_t, std::string> function_index_to_name_;
-  static bool ShouldTrace();
-
 public:
+  // Move ShouldTrace() here to the public section
+  static bool ShouldTrace();
+  
   // Register function for runtime tracing
   static void RegisterFunction(uint32_t index, const std::string& name, uintptr_t target);
   
@@ -39,8 +36,14 @@ public:
   static void LogFunctionCall(const std::string& function_name);
   static void TrackFunctionEntry(const std::string& function_name, uint32_t function_index);
   static void TrackFunctionExit(const std::string& function_name);
+
+private:
+  static thread_local std::vector<std::string> call_stack_;
+  static std::unordered_map<uintptr_t, std::string> function_names_;
+  static std::unordered_map<uint32_t, std::string> function_index_to_name_;
+  // Remove ShouldTrace() from here - it's now public above
   
-  // Make function_index_to_name_ accessible to runtime hooks
+  // Friend declarations
   friend void WasmRuntimeFunctionEntry(uint32_t function_index);
   friend void WasmRuntimeFunctionExit(uint32_t function_index);
 };

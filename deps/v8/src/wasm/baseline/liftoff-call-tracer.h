@@ -46,7 +46,10 @@ class CallTracer {
   static void TraceFunctionEntry(const std::string& function_name);
   static void TraceFunctionExit(const std::string& function_name);
 
-  // Enhanced function name resolution
+  // New method for tracing with function index (resolves to name automatically)
+  static void TraceCallWithIndex(uint32_t function_index);
+
+  // Function name resolution
   static std::string ResolveFunctionName(uint32_t function_index);
   static void SetModuleInfo(const void* module, const void* wire_bytes);
 
@@ -58,6 +61,9 @@ class CallTracer {
   // Visualization and depth
   static void PrintCallTree();
   static std::string GetIndentation(uint32_t depth);
+
+  // Debug functionality
+  static void DebugPrintRegistrations();
 
   // Export functionality
   static void ExportToJSON(const std::string& filename);
@@ -106,6 +112,7 @@ class CallTracer {
   // Module information for name resolution
   static const void* current_module_;
   static const void* current_wire_bytes_;
+  static bool module_names_extracted_;
 
   // Helper functions
   static double GetElapsedMs(

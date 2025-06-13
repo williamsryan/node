@@ -22,6 +22,7 @@ std::unordered_map<uint32_t, std::vector<uint32_t>> CallTracer::call_graph_;
 std::unordered_map<uint32_t, uint32_t> CallTracer::call_counts_;
 const void* CallTracer::current_module_ = nullptr;
 const void* CallTracer::current_wire_bytes_ = nullptr;
+bool CallTracer::module_names_extracted_ = false;
 
 bool CallTracer::ShouldTrace() {
   static bool checked = false;
@@ -31,8 +32,7 @@ bool CallTracer::ShouldTrace() {
     should_trace = env && std::strcmp(env, "1") == 0;
     checked = true;
     if (should_trace) {
-      std::cout << "[WASM_TRACE] Enhanced function call tracing enabled"
-                << std::endl;
+      std::cout << "[WASM_TRACE] Function call tracing enabled" << std::endl;
       trace_start_time_ = std::chrono::high_resolution_clock::now();
     }
   }
@@ -46,10 +46,9 @@ void CallTracer::RegisterFunction(uint32_t index, const std::string& name,
   function_names_[target] = name;
   function_index_to_name_[index] = name;
 
-  std::cout << "[WASM_TRACE] Registered function: "
-            << ResolveFunctionName(index) << " (index: " << index
-            << ", target: 0x" << std::hex << target << std::dec << ")"
-            << std::endl;
+  // std::cout << "[WASM_TRACE] Registered function: " << name
+  //           << " (index: " << index << ", target: 0x" << std::hex << target
+  //           << std::dec << ")" << std::endl;
 }
 
 std::string CallTracer::ResolveFunctionName(uint32_t function_index) {
@@ -79,8 +78,6 @@ void CallTracer::TraceRuntimeCall(uintptr_t target) {
 void CallTracer::TraceRuntimeCall(const std::string& function_name) {
   if (!ShouldTrace()) return;
 
-  RecordFunctionCall(function_name, false);
-
   auto now = std::chrono::high_resolution_clock::now();
   uint32_t depth = call_stack_.size();
   std::string caller = call_stack_.empty() ? "ENTRY" : call_stack_.back();
@@ -92,13 +89,24 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
     return;
   }
 
-  // Extract function index from name if possible
+  // CRITICAL FIX: Always try to resolve function names
   uint32_t func_index = ExtractFunctionIndex(function_name);
+  std::string resolved_name = ResolveFunctionName(func_index);
+
+  // If resolution gave us back a generic name but we had a specific name,
+  // prefer the specific one
+  if (resolved_name.substr(0, 5) == "func_" &&
+      function_name.substr(0, 5) != "func_") {
+    resolved_name = function_name;
+  }
+
+  // Record the call with the resolved name
+  RecordFunctionCall(resolved_name, false);
 
   // Create call info
   CallInfo call_info;
   call_info.function_index = func_index;
-  call_info.function_name = function_name;
+  call_info.function_name = resolved_name;
   call_info.start_time = now;
   call_info.depth = depth;
   call_info.call_id = next_call_id_++;
@@ -115,7 +123,19 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
     std::cout << GetIndentation(depth);
   }
 
-  std::cout << caller << " → " << function_name << std::endl;
+  // ALSO resolve the caller name if it's not ENTRY
+  std::string resolved_caller = caller;
+  if (caller != "ENTRY") {
+    uint32_t caller_index = ExtractFunctionIndex(caller);
+    std::string temp_resolved = ResolveFunctionName(caller_index);
+    // If we got a better resolution, use it
+    if (temp_resolved.substr(0, 5) != "func_" ||
+        caller.substr(0, 5) == "func_") {
+      resolved_caller = temp_resolved;
+    }
+  }
+
+  std::cout << resolved_caller << " → " << resolved_name << std::endl;
 
   // Update call graph
   if (!call_stack_.empty()) {
@@ -123,7 +143,7 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
     UpdateCallGraph(caller_index, func_index);
   }
 
-  call_stack_.push_back(function_name);
+  call_stack_.push_back(resolved_name);
   depth_stack_.push_back(func_index);
   call_history_.push_back(call_info);
 }
@@ -159,7 +179,19 @@ void CallTracer::TraceImportCall(const std::string& import_name) {
     std::cout << GetIndentation(depth);
   }
 
-  std::cout << "[IMPORT] " << caller << " → " << import_name << std::endl;
+  // Resolve caller name for consistency
+  std::string resolved_caller = caller;
+  if (caller != "ENTRY") {
+    uint32_t caller_index = ExtractFunctionIndex(caller);
+    std::string temp_resolved = ResolveFunctionName(caller_index);
+    if (temp_resolved.substr(0, 5) != "func_" ||
+        caller.substr(0, 5) == "func_") {
+      resolved_caller = temp_resolved;
+    }
+  }
+
+  std::cout << "[IMPORT] " << resolved_caller << " → " << import_name
+            << std::endl;
 
   call_history_.push_back(call_info);
 }
@@ -174,9 +206,22 @@ void CallTracer::TraceFunctionExit(const std::string& function_name) {
   if (!call_stack_.empty() && !call_history_.empty()) {
     auto now = std::chrono::high_resolution_clock::now();
 
+    // Resolve the function name for consistency
+    uint32_t func_index = ExtractFunctionIndex(function_name);
+    std::string resolved_name = ResolveFunctionName(func_index);
+
+    // If resolution gave us back a generic name but we had a specific name,
+    // prefer the specific one
+    if (resolved_name.substr(0, 5) == "func_" &&
+        function_name.substr(0, 5) != "func_") {
+      resolved_name = function_name;
+    }
+
     // Find the corresponding entry in call_history
     for (auto it = call_history_.rbegin(); it != call_history_.rend(); ++it) {
-      if (!it->completed && it->function_name == function_name) {
+      // Match by either the original name or resolved name
+      if (!it->completed && (it->function_name == function_name ||
+                             it->function_name == resolved_name)) {
         it->end_time = now;
         it->completed = true;
 
@@ -188,21 +233,30 @@ void CallTracer::TraceFunctionExit(const std::string& function_name) {
           if (depth_visualization_enabled_) {
             std::cout << GetIndentation(it->depth);
           }
-          std::cout << "↳ " << function_name << " completed in " << std::fixed
-                    << std::setprecision(3) << duration << "ms" << std::endl;
+          std::cout << "↳ " << it->function_name << " completed in "
+                    << std::fixed << std::setprecision(3) << duration << "ms"
+                    << std::endl;
         }
         break;
       }
     }
 
-    // Remove from call stack
-    if (call_stack_.back() == function_name) {
+    // Remove from call stack - check both resolved and original names
+    if (call_stack_.back() == function_name ||
+        call_stack_.back() == resolved_name) {
       call_stack_.pop_back();
       if (!depth_stack_.empty()) {
         depth_stack_.pop_back();
       }
     }
   }
+}
+
+void CallTracer::TraceCallWithIndex(uint32_t function_index) {
+  if (!ShouldTrace()) return;
+
+  std::string resolved_name = ResolveFunctionName(function_index);
+  TraceRuntimeCall(resolved_name);
 }
 
 uint32_t CallTracer::GetCurrentDepth() { return call_stack_.size(); }
@@ -226,6 +280,16 @@ void CallTracer::PrintCallStack() {
   for (size_t i = 0; i < call_stack_.size(); ++i) {
     std::cout << GetIndentation(i) << "→ " << call_stack_[i] << std::endl;
   }
+}
+
+void CallTracer::DebugPrintRegistrations() {
+  if (!ShouldTrace()) return;
+
+  std::cout << "[WASM_TRACE] === Registered Function Names ===" << std::endl;
+  for (const auto& [index, name] : function_index_to_name_) {
+    std::cout << "  Index " << index << " → " << name << std::endl;
+  }
+  std::cout << "==============================" << std::endl;
 }
 
 double CallTracer::GetElapsedMs(
@@ -420,7 +484,7 @@ void CallTracer::ExportToCSV(const std::string& filename) {
 void CallTracer::PrintStatistics() {
   if (!ShouldTrace()) return;
 
-  std::cout << "\n[WASM_TRACE] === Execution Statistics ===" << std::endl;
+  std::cout << "\n=== Execution Statistics ===" << std::endl;
   std::cout << "Total function calls: " << call_history_.size() << std::endl;
   std::cout << "Unique functions called: " << function_index_to_name_.size()
             << std::endl;
@@ -457,7 +521,7 @@ void CallTracer::PrintStatistics() {
 void CallTracer::PrintHotFunctions(int top_n) {
   if (!ShouldTrace()) return;
 
-  std::cout << "\n[WASM_TRACE] === Top " << top_n
+  std::cout << "\n=== Top " << top_n
             << " Most Called Functions ===" << std::endl;
 
   std::vector<std::pair<uint32_t, uint32_t>> sorted_calls(call_counts_.begin(),

@@ -4,9 +4,6 @@
 
 #include "src/wasm/wasm-objects.h"
 
-#include "src/wasm/baseline/liftoff-call-tracer.h"
-#include "src/wasm/baseline/liftoff-memory-tracker.h"
-
 #include "src/base/iterator.h"
 #include "src/base/vector.h"
 #include "src/builtins/builtins-inl.h"
@@ -18,6 +15,8 @@
 #include "src/objects/oddball.h"
 #include "src/objects/shared-function-info.h"
 #include "src/utils/utils.h"
+#include "src/wasm/baseline/liftoff-call-tracer.h"
+#include "src/wasm/baseline/liftoff-memory-tracker.h"
 #include "src/wasm/code-space-access.h"
 #include "src/wasm/compilation-environment-inl.h"
 #include "src/wasm/module-compiler.h"
@@ -1141,17 +1140,20 @@ Tagged<Object> ImportedFunctionEntry::object_ref() {
 }
 
 Address ImportedFunctionEntry::target() {
-  Address target_addr = instance_data_->dispatch_table_for_imports()->target(index_);
-  
+  Address target_addr =
+      instance_data_->dispatch_table_for_imports()->target(index_);
+
   // ADD SIMPLE RUNTIME TRACING:
   if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
-    std::string caller = v8::internal::wasm::liftoff::CallTracer::GetCurrentFunction();
+    std::string caller =
+        v8::internal::wasm::liftoff::CallTracer::GetCurrentFunction();
     std::string import_name = "import_" + std::to_string(index_);
-    
-    std::cout << "[IMPORT_CALL] " << caller << " → " << import_name 
-              << " (target: 0x" << std::hex << target_addr << std::dec << ")" << std::endl;
+
+    std::cout << "[IMPORT_CALL] " << caller << " → " << import_name
+              << " (target: 0x" << std::hex << target_addr << std::dec << ")"
+              << std::endl;
   }
-  
+
   return target_addr;
 }
 
@@ -1223,6 +1225,53 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
   // because otherwise we would have to allocate when the instance is not fully
   // initialized yet, which can lead to heap verification errors.
   const WasmModule* module = native_module->module();
+
+  // Register ALL function names BEFORE any execution can start
+  if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
+    std::cout << "[WASM_TRACE] WasmTrustedInstanceData::New() - Function name "
+                 "registration..."
+              << std::endl;
+
+    base::Vector<const uint8_t> wire_bytes = native_module->wire_bytes();
+    wasm::ModuleWireBytes module_wire_bytes(wire_bytes);
+
+    // Register ALL exported functions immediately
+    for (const auto& exp : module->export_table) {
+      if (exp.kind == wasm::kExternalFunction) {
+        wasm::WasmName export_name = module_wire_bytes.GetNameOrNull(exp.name);
+        std::string func_name;
+
+        if (!export_name.empty()) {
+          func_name =
+              std::string(reinterpret_cast<const char*>(export_name.begin()),
+                          export_name.size());
+        } else {
+          func_name = "func_" + std::to_string(exp.index);
+        }
+
+        v8::internal::wasm::liftoff::CallTracer::RegisterFunction(exp.index,
+                                                                  func_name, 0);
+        // std::cout << "[WASM_TRACE] Early registered exported function "
+        //           << exp.index << ": " << func_name << std::endl;
+      }
+    }
+
+    // Register ALL other functions with generic names to ensure complete
+    // coverage
+    for (uint32_t i = 0; i < module->functions.size(); ++i) {
+      // Check if this function was already registered as an export
+      std::string existing_name =
+          v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(i);
+      if (existing_name == "func_" + std::to_string(i)) {
+        // Not registered yet, register with generic name
+        v8::internal::wasm::liftoff::CallTracer::RegisterFunction(
+            i, "func_" + std::to_string(i), 0);
+      }
+    }
+
+    std::cout << "[WASM_TRACE] Function name registration complete."
+              << std::endl;
+  }
 
   int num_imported_functions = module->num_imported_functions;
   DirectHandle<WasmDispatchTable> dispatch_table_for_imports =
@@ -1391,32 +1440,34 @@ void WasmTrustedInstanceData::InitDataSegmentArrays(
 Address WasmTrustedInstanceData::GetCallTarget(uint32_t func_index) {
   wasm::NativeModule* native_module = this->native_module();
   SBXCHECK_BOUNDS(func_index, native_module->num_functions());
-  
+
   // Add function call tracing
   const WasmModule* module = native_module->module();
   if (func_index < module->functions.size()) {
     // Get function name for tracing
     base::Vector<const uint8_t> wire_bytes = native_module->wire_bytes();
     wasm::ModuleWireBytes module_bytes(wire_bytes);
-    wasm::WireBytesRef name_ref = module->lazily_generated_names.LookupFunctionName(
-        module_bytes, func_index);
-    
+    wasm::WireBytesRef name_ref =
+        module->lazily_generated_names.LookupFunctionName(module_bytes,
+                                                          func_index);
+
     std::string func_name;
     if (name_ref.is_set()) {
       wasm::WasmName name = module_bytes.GetNameOrNull(name_ref);
       if (!name.empty()) {
-        func_name = std::string(reinterpret_cast<const char*>(name.begin()), name.size());
+        func_name = std::string(reinterpret_cast<const char*>(name.begin()),
+                                name.size());
       }
     }
-    
+
     if (func_name.empty()) {
       func_name = "func_" + std::to_string(func_index);
     }
-    
+
     // Trace the function call
     v8::internal::wasm::liftoff::CallTracer::TraceFunctionEntry(func_name);
   }
-  
+
   if (func_index < native_module->num_imported_functions()) {
     return dispatch_table_for_imports()->target(func_index);
   }
@@ -1990,7 +2041,6 @@ const wasm::FunctionSig* WasmCapiFunction::GetSignature(Zone* zone) const {
       zone, function_data->serialized_signature());
 }
 
-// In the WasmDispatchTable::Set method, add runtime tracing:
 void WasmDispatchTable::Set(int index, Tagged<Object> ref, Address call_target,
                             int sig_id) {
   if (ref == Smi::zero()) {
@@ -2002,38 +2052,24 @@ void WasmDispatchTable::Set(int index, Tagged<Object> ref, Address call_target,
   SBXCHECK_BOUNDS(index, length());
   DCHECK(IsWasmApiFunctionRef(ref) || IsWasmTrustedInstanceData(ref));
   DCHECK_EQ(ref == Smi::zero(), call_target == kNullAddress);
-  
-  // Add runtime call tracing hook
-  if (IsWasmTrustedInstanceData(ref)) {
-    auto instance_data = Cast<WasmTrustedInstanceData>(ref);
-    const WasmModule* module = instance_data->module();
-    if (index < static_cast<int>(module->functions.size())) {
-      // Get function name for tracing
-      base::Vector<const uint8_t> wire_bytes = instance_data->native_module()->wire_bytes();
-      wasm::ModuleWireBytes module_bytes(wire_bytes);
-      wasm::WireBytesRef name_ref = module->lazily_generated_names.LookupFunctionName(
-          module_bytes, index);
-      
-      std::string func_name;
-      if (name_ref.is_set()) {
-        wasm::WasmName name = module_bytes.GetNameOrNull(name_ref);
-        if (!name.empty()) {
-          func_name = std::string(reinterpret_cast<const char*>(name.begin()), name.size());
-        }
-      }
-      
-      if (func_name.empty()) {
-        func_name = "func_" + std::to_string(index);
-      }
-      
-      // Log the function setup for runtime dispatch
-      v8::internal::wasm::liftoff::CallTracer::RegisterFunction(index, func_name, call_target);
+
+  // Optional: Update the call target for already registered functions
+  if (IsWasmTrustedInstanceData(ref) &&
+      v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
+    // Update the target address for this function if we have it registered
+    std::string existing_name =
+        v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(index);
+    if (existing_name != "func_" + std::to_string(index)) {
+      // This function was already registered, just update the target
+      v8::internal::wasm::liftoff::CallTracer::RegisterFunction(
+          index, existing_name, call_target);
     }
   }
-  
+
   const int offset = OffsetOf(index);
   WriteProtectedPointerField(offset + kRefBias, Cast<TrustedObject>(ref));
-  CONDITIONAL_WRITE_BARRIER(*this, offset + kRefBias, ref, UPDATE_WRITE_BARRIER);
+  CONDITIONAL_WRITE_BARRIER(*this, offset + kRefBias, ref,
+                            UPDATE_WRITE_BARRIER);
   WriteField<Address>(offset + kTargetBias, call_target);
   WriteField<int>(offset + kSigBias, sig_id);
 }

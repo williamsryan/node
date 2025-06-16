@@ -808,6 +808,7 @@ Environment::Environment(IsolateData* isolate_data,
       exec_argv_(exec_args),
       argv_(args),
       exec_path_(Environment::GetExecPath(args)),
+      main_script_basename_("wasm"),
       exit_info_(
           isolate_, kExitInfoFieldCount, MAYBE_FIELD_PTR(env_info, exit_info)),
       should_abort_on_uncaught_toggle_(
@@ -986,6 +987,29 @@ void Environment::InitializeMainContext(Local<Context> context,
   }
 }
 
+std::string ExtractBasenameFromPath(const std::string& script_path) {
+  if (script_path.empty()) return "wasm";
+
+  // Find last slash (works for both / and \)
+  size_t last_slash = script_path.find_last_of("/\\");
+  std::string filename = (last_slash == std::string::npos)
+                             ? script_path
+                             : script_path.substr(last_slash + 1);
+
+  // Remove .js extension if present
+  size_t dot_pos = filename.find_last_of('.');
+  if (dot_pos != std::string::npos && filename.substr(dot_pos) == ".js") {
+    filename = filename.substr(0, dot_pos);
+  }
+
+  // Return basename or fallback
+  return filename.empty() ? "wasm" : filename;
+}
+
+void Environment::SetMainScriptBasename(const std::string& script_path) {
+  main_script_basename_ = ExtractBasenameFromPath(script_path);
+}
+
 Environment::~Environment() {
   HandleScope handle_scope(isolate());
   Local<Context> ctx = context();
@@ -993,9 +1017,14 @@ Environment::~Environment() {
   if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
     v8::internal::wasm::liftoff::CallTracer::PrintStatistics();
     v8::internal::wasm::liftoff::CallTracer::PrintHotFunctions(10);
-    v8::internal::wasm::liftoff::CallTracer::ExportToJSON("wasm_trace.json");
-    v8::internal::wasm::liftoff::CallTracer::ExportToGraphViz("wasm_calls.dot");
-    v8::internal::wasm::liftoff::CallTracer::ExportToCSV("wasm_calls.csv");
+
+    // Use basename for unique filenames
+    std::string base =
+        main_script_basename_.empty() ? "wasm" : main_script_basename_;
+
+    v8::internal::wasm::liftoff::CallTracer::ExportToJSON(base + "_trace.json");
+    v8::internal::wasm::liftoff::CallTracer::ExportToGraphViz(base + "_calls.dot");
+    v8::internal::wasm::liftoff::CallTracer::ExportToCSV(base + "_calls.csv");
   }
 
   if (Environment** interrupt_data = interrupt_data_.load()) {

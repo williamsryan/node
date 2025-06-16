@@ -147,6 +147,13 @@ NodeMainInstance::CreateMainEnvironment(ExitCode* exit_code) {
         CreateEnvironment(isolate_data_.get(), context, args_, exec_args_));
   }
 
+  // Set the main script basename after environment creation
+  if (env && args_.size() > 1) {
+    // args_[0] is the node executable path
+    // args_[1] is the script file path (if present)
+    env->SetMainScriptBasename(args_[1]);
+  }
+
   return env;
 }
 

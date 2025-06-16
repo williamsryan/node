@@ -79,7 +79,7 @@ class ShadowRealm;
 namespace contextify {
 class ContextifyScript;
 class CompiledFnEntry;
-}
+}  // namespace contextify
 
 namespace performance {
 class PerformanceState;
@@ -189,7 +189,7 @@ class NODE_EXTERN_PRIVATE IsolateData : public MemoryRetainer {
 #define VY(PropertyName, StringValue) V(v8::Symbol, PropertyName)
 #define VS(PropertyName, StringValue) V(v8::String, PropertyName)
 #define VR(PropertyName, TypeName) V(v8::Private, per_realm_##PropertyName)
-#define V(TypeName, PropertyName)                                             \
+#define V(TypeName, PropertyName)                                              \
   inline v8::Local<TypeName> PropertyName() const;
   PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES(VP)
   PER_ISOLATE_SYMBOL_PROPERTIES(VY)
@@ -231,8 +231,7 @@ class NODE_EXTERN_PRIVATE IsolateData : public MemoryRetainer {
 #define VR(PropertyName, TypeName) V(v8::Private, per_realm_##PropertyName)
 #define VM(PropertyName) V(v8::ObjectTemplate, PropertyName##_binding_template)
 #define VT(PropertyName, TypeName) V(TypeName, PropertyName)
-#define V(TypeName, PropertyName)                                             \
-  v8::Eternal<TypeName> PropertyName ## _;
+#define V(TypeName, PropertyName) v8::Eternal<TypeName> PropertyName##_;
   PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES(VP)
   PER_ISOLATE_SYMBOL_PROPERTIES(VY)
   PER_ISOLATE_STRING_PROPERTIES(VS)
@@ -476,18 +475,14 @@ class TickInfo : public MemoryRetainer {
   AliasedUint8Array fields_;
 };
 
-class TrackingTraceStateObserver :
-    public v8::TracingController::TraceStateObserver {
+class TrackingTraceStateObserver
+    : public v8::TracingController::TraceStateObserver {
  public:
   explicit TrackingTraceStateObserver(Environment* env) : env_(env) {}
 
-  void OnTraceEnabled() override {
-    UpdateTraceCategoryState();
-  }
+  void OnTraceEnabled() override { UpdateTraceCategoryState(); }
 
-  void OnTraceDisabled() override {
-    UpdateTraceCategoryState();
-  }
+  void OnTraceDisabled() override { UpdateTraceCategoryState(); }
 
  private:
   void UpdateTraceCategoryState();
@@ -609,6 +604,11 @@ class Environment final : public MemoryRetainer {
   Environment& operator=(Environment&&) = delete;
 
   SET_MEMORY_INFO_NAME(Environment)
+
+  void SetMainScriptBasename(const std::string& script_path);
+  const std::string& GetMainScriptBasename() const {
+    return main_script_basename_;
+  }
 
   static std::string GetExecPath(const std::vector<std::string>& argv);
   static std::string GetCwd(const std::string& exec_path);
@@ -864,7 +864,7 @@ class Environment final : public MemoryRetainer {
 #define VP(PropertyName, StringValue) V(v8::Private, PropertyName)
 #define VY(PropertyName, StringValue) V(v8::Symbol, PropertyName)
 #define VS(PropertyName, StringValue) V(v8::String, PropertyName)
-#define V(TypeName, PropertyName)                                             \
+#define V(TypeName, PropertyName)                                              \
   inline v8::Local<TypeName> PropertyName() const;
   PER_ISOLATE_PRIVATE_SYMBOL_PROPERTIES(VP)
   PER_ISOLATE_SYMBOL_PROPERTIES(VY)
@@ -874,9 +874,9 @@ class Environment final : public MemoryRetainer {
 #undef VY
 #undef VP
 
-#define V(PropertyName, TypeName)                                             \
-  inline v8::Local<TypeName> PropertyName() const;                            \
-  inline void set_ ## PropertyName(v8::Local<TypeName> value);
+#define V(PropertyName, TypeName)                                              \
+  inline v8::Local<TypeName> PropertyName() const;                             \
+  inline void set_##PropertyName(v8::Local<TypeName> value);
   PER_ISOLATE_TEMPLATE_PROPERTIES(V)
   // Per-realm strong persistent values of the principal realm.
   // Get/set the value with an explicit realm instead when possible.
@@ -894,9 +894,7 @@ class Environment final : public MemoryRetainer {
   inline inspector::Agent* inspector_agent() const {
     return inspector_agent_.get();
   }
-  inline void StopInspector() {
-    inspector_agent_.reset();
-  }
+  inline void StopInspector() { inspector_agent_.reset(); }
 
   inline bool is_in_inspector_console_call() const;
   inline void set_is_in_inspector_console_call(bool value);
@@ -909,13 +907,9 @@ class Environment final : public MemoryRetainer {
   inline ReqWrapQueue* req_wrap_queue() { return &req_wrap_queue_; }
 
   // https://w3c.github.io/hr-time/#dfn-time-origin
-  inline uint64_t time_origin() {
-    return time_origin_;
-  }
+  inline uint64_t time_origin() { return time_origin_; }
   // https://w3c.github.io/hr-time/#dfn-get-time-origin-timestamp
-  inline double time_origin_timestamp() {
-    return time_origin_timestamp_;
-  }
+  inline double time_origin_timestamp() { return time_origin_timestamp_; }
 
   inline bool EmitProcessEnvWarning() {
     bool current_value = emit_env_nonstring_warning_;
@@ -933,8 +927,8 @@ class Environment final : public MemoryRetainer {
   // Unlike the JS setImmediate() function, nested SetImmediate() calls will
   // be run without returning control to the event loop, similar to nextTick().
   template <typename Fn>
-  inline void SetImmediate(
-      Fn&& cb, CallbackFlags::Flags flags = CallbackFlags::kRefed);
+  inline void SetImmediate(Fn&& cb,
+                           CallbackFlags::Flags flags = CallbackFlags::kRefed);
   template <typename Fn>
   // This behaves like SetImmediate() but can be called from any thread.
   inline void SetImmediateThreadsafe(
@@ -1082,6 +1076,8 @@ class Environment final : public MemoryRetainer {
   void TrackContext(v8::Local<v8::Context> context);
   void UntrackContext(v8::Local<v8::Context> context);
 
+  std::string main_script_basename_;
+
   std::list<binding::DLib> loaded_addons_;
   v8::Isolate* const isolate_;
   IsolateData* const isolate_data_;
@@ -1226,7 +1222,7 @@ class Environment final : public MemoryRetainer {
   // yet or already have been destroyed.
   bool task_queues_async_initialized_ = false;
 
-  std::atomic<Environment**> interrupt_data_ {nullptr};
+  std::atomic<Environment**> interrupt_data_{nullptr};
   void RequestInterruptFromV8();
   static void CheckImmediate(uv_check_t* handle);
 

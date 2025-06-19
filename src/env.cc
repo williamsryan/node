@@ -1019,12 +1019,17 @@ Environment::~Environment() {
     v8::internal::wasm::liftoff::CallTracer::PrintHotFunctions(10);
 
     // Use basename for unique filenames
-    std::string base =
+    std::string trace_file_prefix =
         main_script_basename_.empty() ? "wasm" : main_script_basename_;
 
-    v8::internal::wasm::liftoff::CallTracer::ExportToJSON(base + "_trace.json");
-    v8::internal::wasm::liftoff::CallTracer::ExportToGraphViz(base + "_calls.dot");
-    v8::internal::wasm::liftoff::CallTracer::ExportToCSV(base + "_calls.csv");
+    v8::internal::wasm::liftoff::CallTracer::ExportToJSON(trace_file_prefix +
+                                                          "_trace.json");
+    v8::internal::wasm::liftoff::CallTracer::ExportToGraphViz(
+        trace_file_prefix + "_calls.dot");
+    v8::internal::wasm::liftoff::CallTracer::ExportToCSV(trace_file_prefix +
+                                                         "_calls.csv");
+    v8::internal::wasm::liftoff::CallTracer::ExportToText(trace_file_prefix +
+                                                          "_trace.txt");
   }
 
   if (Environment** interrupt_data = interrupt_data_.load()) {

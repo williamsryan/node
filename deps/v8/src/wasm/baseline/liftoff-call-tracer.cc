@@ -1,6 +1,8 @@
 // File: deps/v8/src/wasm/baseline/liftoff-call-tracer.cc
 #include "liftoff-call-tracer.h"
 
+#include <fstream>
+
 namespace v8::internal::wasm {
 namespace liftoff {
 
@@ -14,6 +16,7 @@ thread_local std::chrono::high_resolution_clock::time_point
 thread_local bool CallTracer::timing_enabled_ = true;
 thread_local bool CallTracer::depth_visualization_enabled_ = true;
 thread_local uint32_t CallTracer::max_depth_ = 50;
+thread_local std::ofstream CallTracer::trace_output_file_;
 
 // Global static member definitions
 std::unordered_map<uintptr_t, std::string> CallTracer::function_names_;
@@ -34,6 +37,13 @@ bool CallTracer::ShouldTrace() {
     if (should_trace) {
       std::cout << "[WASM_TRACE] Function call tracing enabled" << std::endl;
       trace_start_time_ = std::chrono::high_resolution_clock::now();
+      trace_output_file_.open("wasm_call_trace.txt",
+                              std::ios::out | std::ios::trunc);
+      if (!trace_output_file_.is_open()) {
+        std::cerr
+            << "[WASM_TRACE] Failed to open wasm_call_trace.txt for writing"
+            << std::endl;
+      }
     }
   }
   return should_trace;
@@ -630,6 +640,9 @@ void CallTracer::Reset() {
   next_call_id_ = 0;
   call_counts_.clear();
   call_graph_.clear();
+  if (trace_output_file_.is_open()) {
+    trace_output_file_.close();
+  }
 }
 
 void CallTracer::EnableTiming(bool enable) { timing_enabled_ = enable; }
@@ -673,3 +686,45 @@ void CallTracer::PrintCallFrequency() { PrintHotFunctions(10); }
 
 }  // namespace liftoff
 }  // namespace v8::internal::wasm
+
+// Implementation of ExportToText for CallTracer
+void v8::internal::wasm::liftoff::CallTracer::ExportToText(
+    const std::string& filename) {
+  if (!ShouldTrace()) return;
+
+  std::ofstream file(filename);
+  if (!file.is_open()) {
+    std::cerr << "[WASM_TRACE] Failed to open " << filename << " for writing"
+              << std::endl;
+    return;
+  }
+
+  for (const auto& call : call_history_) {
+    double elapsed = GetElapsedMs(trace_start_time_, call.start_time);
+    std::string indent = GetIndentation(call.depth);
+    std::string line;
+
+    if (call.is_import) {
+      line = "[IMPORT] ";
+    }
+
+    line += "[" + std::to_string(elapsed) + "ms] ";
+    line += indent;
+
+    // Determine caller if possible
+    std::string caller = "ENTRY";
+    for (auto it = call_history_.rbegin(); it != call_history_.rend(); ++it) {
+      if (it->call_id < call.call_id && it->depth + 1 == call.depth) {
+        caller = it->function_name;
+        break;
+      }
+    }
+
+    line += caller + " → " + call.function_name;
+    file << line << std::endl;
+  }
+
+  file.close();
+  std::cout << "[WASM_TRACE] Exported textual trace to " << filename
+            << std::endl;
+}

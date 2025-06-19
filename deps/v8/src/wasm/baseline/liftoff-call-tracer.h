@@ -71,11 +71,14 @@ class CallTracer {
   static void ExportToTrace(
       const std::string& filename);  // Chrome trace format
   static void ExportToCSV(const std::string& filename);
+  static void ExportToText(const std::string& filename);
 
   // Statistics and analysis
   static void PrintStatistics();
   static void PrintHotFunctions(int top_n = 10);
   static void PrintCallFrequency();
+  static std::ofstream trace_log_;
+  static thread_local std::ofstream trace_output_file_;
 
   // Additional compatibility methods for existing V8 integration
   static void LogFunctionCall(const std::string& function_name);

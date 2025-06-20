@@ -1227,6 +1227,15 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
   const WasmModule* module = native_module->module();
 
   // Register ALL function names BEFORE any execution can start
+  // Complete integration code for wasm-objects.cc
+  // This replaces your existing paste-3.txt code
+
+  // Complete integration code for wasm-objects.cc
+  // This replaces your existing paste-3.txt code
+
+  // Complete integration code for wasm-objects.cc
+  // This replaces your existing paste-3.txt code
+
   if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
     std::cout << "[WASM_TRACE] WasmTrustedInstanceData::New() - Function name "
                  "registration..."
@@ -1234,6 +1243,185 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
 
     base::Vector<const uint8_t> wire_bytes = native_module->wire_bytes();
     wasm::ModuleWireBytes module_wire_bytes(wire_bytes);
+
+    // NEW: Try to extract the WASM filename from various sources
+    std::string wasm_filename;
+
+    // Method 1: Check if there's a debug name from native module
+    if (wasm_filename.empty() && native_module) {
+      // Try to get any available debug information
+      // Use the native module's address through .get() for a unique identifier
+      std::string debug_info =
+          "wasm_module_" +
+          std::to_string(reinterpret_cast<uintptr_t>(native_module.get()) %
+                         1000000);
+      wasm_filename = debug_info;
+      std::cout << "[WASM_TRACE] Using native module reference: "
+                << wasm_filename << std::endl;
+    }
+
+    // Method 2: Look for any embedded filename-like strings in the name section
+    if (module->name_section.is_set()) {
+      uint32_t name_section_offset = module->name_section.offset();
+      uint32_t name_section_length = module->name_section.length();
+
+      if (name_section_offset < wire_bytes.size() &&
+          name_section_offset + name_section_length <= wire_bytes.size()) {
+        const uint8_t* data = wire_bytes.begin() + name_section_offset;
+        size_t size = name_section_length;
+
+        // Look for potential filename patterns in the name section
+        // Scan for printable strings that might be filenames
+        std::string name_section_data(reinterpret_cast<const char*>(data),
+                                      std::min(size, static_cast<size_t>(512)));
+
+        // Look for common file extensions
+        std::vector<std::string> extensions = {".wasm", ".wat", ".js", ".ts",
+                                               ".mjs"};
+        for (const auto& ext : extensions) {
+          size_t pos = name_section_data.find(ext);
+          if (pos != std::string::npos) {
+            // Try to extract a reasonable filename around the extension
+            size_t start = pos;
+            // Go backwards to find the start of the filename
+            while (start > 0 && name_section_data[start - 1] != '\0' &&
+                   name_section_data[start - 1] != '/' &&
+                   name_section_data[start - 1] != '\\' &&
+                   name_section_data[start - 1] != ' ' &&
+                   name_section_data[start - 1] != '\n' &&
+                   name_section_data[start - 1] != '\r') {
+              start--;
+            }
+
+            // Go forwards to find the end
+            size_t end = pos + ext.length();
+            while (end < name_section_data.length() &&
+                   name_section_data[end] != '\0' &&
+                   name_section_data[end] != ' ' &&
+                   name_section_data[end] != '\n' &&
+                   name_section_data[end] != '\r') {
+              end++;
+            }
+
+            std::string potential_filename =
+                name_section_data.substr(start, end - start);
+            // Validate it looks like a reasonable filename
+            if (potential_filename.length() > ext.length() &&
+                potential_filename.length() < 100) {
+              wasm_filename = potential_filename;
+              std::cout << "[WASM_TRACE] Found filename in name section: "
+                        << wasm_filename << std::endl;
+              break;
+            }
+          }
+        }
+
+        // If no extension found, look for any reasonable string that might be a
+        // module name
+        if (wasm_filename.empty() || wasm_filename.find("wasm_module_") == 0) {
+          std::vector<std::string> potential_names;
+
+          // Look for strings between null terminators that might be names
+          size_t current_pos = 0;
+          while (current_pos < std::min(size, static_cast<size_t>(256))) {
+            // Find start of potential string (skip non-printable chars)
+            while (current_pos < size &&
+                   (data[current_pos] < 32 || data[current_pos] > 126)) {
+              current_pos++;
+            }
+
+            if (current_pos >= size) break;
+
+            // Find end of string
+            size_t string_start = current_pos;
+            while (current_pos < size && data[current_pos] >= 32 &&
+                   data[current_pos] <= 126) {
+              current_pos++;
+            }
+
+            if (current_pos > string_start) {
+              std::string candidate(
+                  reinterpret_cast<const char*>(data + string_start),
+                  current_pos - string_start);
+
+              // Check if this looks like a reasonable module name
+              if (candidate.length() >= 3 && candidate.length() <= 50 &&
+                  candidate.find_first_of("()[]{}") == std::string::npos &&
+                  (candidate.find("module") != std::string::npos ||
+                   candidate.find("wasm") != std::string::npos ||
+                   candidate.find("lib") != std::string::npos ||
+                   candidate.find("main") != std::string::npos ||
+                   std::isalpha(candidate[0]))) {
+                potential_names.push_back(candidate);
+              }
+            }
+          }
+
+          // Use the most reasonable looking name
+          if (!potential_names.empty()) {
+            // Prefer shorter, more reasonable names
+            std::sort(potential_names.begin(), potential_names.end(),
+                      [](const std::string& a, const std::string& b) {
+                        return a.length() < b.length();
+                      });
+
+            wasm_filename = potential_names[0];
+            std::cout << "[WASM_TRACE] Found potential module name: "
+                      << wasm_filename << std::endl;
+          }
+        }
+      }
+    }
+
+    // Method 3: Create a meaningful name based on module characteristics
+    if (wasm_filename.empty() || wasm_filename.find("wasm_module_") == 0) {
+      // Create a name based on module hash and characteristics
+      size_t module_size = wire_bytes.size();
+
+      // Create a hash based on the first part of the module
+      size_t content_hash = 0;
+      size_t hash_bytes = std::min(static_cast<size_t>(256), wire_bytes.size());
+      for (size_t i = 0; i < hash_bytes; ++i) {
+        content_hash = content_hash * 31 + wire_bytes[i];
+      }
+
+      // Include module characteristics for uniqueness
+      uint32_t num_functions = module->functions.size();
+      uint32_t num_imports = 0;
+      uint32_t num_exports = 0;
+
+      for (const auto& import : module->import_table) {
+        if (import.kind == wasm::kExternalFunction) num_imports++;
+      }
+
+      for (const auto& exp : module->export_table) {
+        if (exp.kind == wasm::kExternalFunction) num_exports++;
+      }
+
+      // Create a descriptive filename
+      wasm_filename = "wasm_module_" + std::to_string(content_hash % 1000000) +
+                      "_" + std::to_string(num_functions) + "funcs";
+
+      if (num_imports > 0) {
+        wasm_filename += "_" + std::to_string(num_imports) + "imports";
+      }
+
+      if (num_exports > 0) {
+        wasm_filename += "_" + std::to_string(num_exports) + "exports";
+      }
+
+      wasm_filename += "_" + std::to_string(module_size) + "bytes";
+
+      std::cout << "[WASM_TRACE] Generated descriptive name: " << wasm_filename
+                << std::endl;
+    }
+
+    // Set the trace file prefix using the discovered or generated filename
+    v8::internal::wasm::liftoff::CallTracer::SetTraceFilePrefix(wasm_filename);
+
+    std::cout << "[WASM_TRACE] Set trace file prefix to: "
+              << v8::internal::wasm::liftoff::CallTracer::GetTraceFilePrefix()
+              << std::endl;
 
     uint32_t function_index = 0;
 

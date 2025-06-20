@@ -65,13 +65,17 @@ class CallTracer {
   // Debug functionality
   static void DebugPrintRegistrations();
 
+  // File naming and output control
+  static void SetTraceFilePrefix(const std::string& prefix);
+  static std::string GetTraceFilePrefix();
+
   // Export functionality
-  static void ExportToJSON(const std::string& filename);
-  static void ExportToGraphViz(const std::string& filename);
+  static void ExportToJSON(const std::string& filename = "");
+  static void ExportToGraphViz(const std::string& filename = "");
   static void ExportToTrace(
-      const std::string& filename);  // Chrome trace format
-  static void ExportToCSV(const std::string& filename);
-  static void ExportToText(const std::string& filename);
+      const std::string& filename = "");  // Chrome trace format
+  static void ExportToCSV(const std::string& filename = "");
+  static void ExportToText(const std::string& filename = "");
 
   // Statistics and analysis
   static void PrintStatistics();
@@ -117,6 +121,9 @@ class CallTracer {
   static const void* current_wire_bytes_;
   static bool module_names_extracted_;
 
+  // Trace file naming
+  static std::string trace_file_prefix_;
+
   // Helper functions
   static double GetElapsedMs(
       std::chrono::high_resolution_clock::time_point start,
@@ -127,6 +134,7 @@ class CallTracer {
   static void UpdateCallGraph(uint32_t caller_index, uint32_t callee_index);
   static void RecordFunctionCall(const std::string& function_name,
                                  bool is_import = false);
+  static std::string ExtractBasename(const std::string& filepath);
 
   // Friend declarations for V8 integration
   friend void WasmRuntimeFunctionEntry(uint32_t function_index);

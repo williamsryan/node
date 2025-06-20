@@ -26,6 +26,7 @@ std::unordered_map<uint32_t, uint32_t> CallTracer::call_counts_;
 const void* CallTracer::current_module_ = nullptr;
 const void* CallTracer::current_wire_bytes_ = nullptr;
 bool CallTracer::module_names_extracted_ = false;
+std::string CallTracer::trace_file_prefix_ = "wasm";
 
 bool CallTracer::ShouldTrace() {
   static bool checked = false;
@@ -37,16 +38,50 @@ bool CallTracer::ShouldTrace() {
     if (should_trace) {
       std::cout << "[WASM_TRACE] Function call tracing enabled" << std::endl;
       trace_start_time_ = std::chrono::high_resolution_clock::now();
-      trace_output_file_.open("wasm_call_trace.txt",
+
+      // Check for custom trace file prefix from environment
+      const char* prefix_env = std::getenv("NODE_WASM_TRACE_PREFIX");
+      if (prefix_env) {
+        trace_file_prefix_ = std::string(prefix_env);
+        std::cout << "[WASM_TRACE] Using custom trace prefix from env: "
+                  << trace_file_prefix_ << std::endl;
+      }
+
+      trace_output_file_.open(trace_file_prefix_ + "_trace.txt",
                               std::ios::out | std::ios::trunc);
       if (!trace_output_file_.is_open()) {
-        std::cerr
-            << "[WASM_TRACE] Failed to open wasm_call_trace.txt for writing"
-            << std::endl;
+        std::cerr << "[WASM_TRACE] Failed to open " << trace_file_prefix_
+                  << "_trace.txt for writing" << std::endl;
       }
     }
   }
   return should_trace;
+}
+
+void CallTracer::SetTraceFilePrefix(const std::string& prefix) {
+  if (!prefix.empty()) {
+    trace_file_prefix_ = ExtractBasename(prefix);
+    std::cout << "[WASM_TRACE] Set trace file prefix to: " << trace_file_prefix_
+              << std::endl;
+  }
+}
+
+std::string CallTracer::GetTraceFilePrefix() { return trace_file_prefix_; }
+
+std::string CallTracer::ExtractBasename(const std::string& filepath) {
+  // Find the last path separator
+  size_t last_slash = filepath.find_last_of("/\\");
+  std::string filename = (last_slash == std::string::npos)
+                             ? filepath
+                             : filepath.substr(last_slash + 1);
+
+  // Remove file extension
+  size_t last_dot = filename.find_last_of('.');
+  if (last_dot != std::string::npos) {
+    filename = filename.substr(0, last_dot);
+  }
+
+  return filename;
 }
 
 void CallTracer::RegisterFunction(uint32_t index, const std::string& name,
@@ -313,10 +348,14 @@ double CallTracer::GetElapsedMs(
 void CallTracer::ExportToJSON(const std::string& filename) {
   if (!ShouldTrace()) return;
 
-  std::ofstream file(filename);
+  // Use provided filename or construct from prefix
+  std::string output_filename =
+      filename.empty() ? (trace_file_prefix_ + "_trace.json") : filename;
+
+  std::ofstream file(output_filename);
   if (!file.is_open()) {
-    std::cout << "[WASM_TRACE] Failed to open " << filename << " for writing"
-              << std::endl;
+    std::cout << "[WASM_TRACE] Failed to open " << output_filename
+              << " for writing" << std::endl;
     return;
   }
 
@@ -402,16 +441,21 @@ void CallTracer::ExportToJSON(const std::string& filename) {
   file << "}\n";
   file.close();
 
-  std::cout << "[WASM_TRACE] Exported trace to " << filename << std::endl;
+  std::cout << "[WASM_TRACE] Exported trace to " << output_filename
+            << std::endl;
 }
 
 void CallTracer::ExportToGraphViz(const std::string& filename) {
   if (!ShouldTrace()) return;
 
-  std::ofstream file(filename);
+  // Use provided filename or construct from prefix
+  std::string output_filename =
+      filename.empty() ? (trace_file_prefix_ + "_calls.dot") : filename;
+
+  std::ofstream file(output_filename);
   if (!file.is_open()) {
-    std::cout << "[WASM_TRACE] Failed to open " << filename << " for writing"
-              << std::endl;
+    std::cout << "[WASM_TRACE] Failed to open " << output_filename
+              << " for writing" << std::endl;
     return;
   }
 
@@ -444,18 +488,22 @@ void CallTracer::ExportToGraphViz(const std::string& filename) {
   file << "}\n";
   file.close();
 
-  std::cout << "[WASM_TRACE] Exported call graph to " << filename
-            << " (use 'dot -Tpng " << filename << " -o graph.png' to visualize)"
-            << std::endl;
+  std::cout << "[WASM_TRACE] Exported call graph to " << output_filename
+            << " (use 'dot -Tpng " << output_filename
+            << " -o graph.png' to visualize)" << std::endl;
 }
 
 void CallTracer::ExportToCSV(const std::string& filename) {
   if (!ShouldTrace()) return;
 
-  std::ofstream file(filename);
+  // Use provided filename or construct from prefix
+  std::string output_filename =
+      filename.empty() ? (trace_file_prefix_ + "_calls.csv") : filename;
+
+  std::ofstream file(output_filename);
   if (!file.is_open()) {
-    std::cout << "[WASM_TRACE] Failed to open " << filename << " for writing"
-              << std::endl;
+    std::cout << "[WASM_TRACE] Failed to open " << output_filename
+              << " for writing" << std::endl;
     return;
   }
 
@@ -488,7 +536,52 @@ void CallTracer::ExportToCSV(const std::string& filename) {
   }
 
   file.close();
-  std::cout << "[WASM_TRACE] Exported trace to " << filename << std::endl;
+  std::cout << "[WASM_TRACE] Exported trace to " << output_filename
+            << std::endl;
+}
+
+void CallTracer::ExportToText(const std::string& filename) {
+  if (!ShouldTrace()) return;
+
+  // Use provided filename or construct from prefix
+  std::string output_filename =
+      filename.empty() ? (trace_file_prefix_ + "_trace.txt") : filename;
+
+  std::ofstream file(output_filename);
+  if (!file.is_open()) {
+    std::cerr << "[WASM_TRACE] Failed to open " << output_filename
+              << " for writing" << std::endl;
+    return;
+  }
+
+  for (const auto& call : call_history_) {
+    double elapsed = GetElapsedMs(trace_start_time_, call.start_time);
+    std::string indent = GetIndentation(call.depth);
+    std::string line;
+
+    if (call.is_import) {
+      line = "[IMPORT] ";
+    }
+
+    line += "[" + std::to_string(elapsed) + "ms] ";
+    line += indent;
+
+    // Determine caller if possible
+    std::string caller = "ENTRY";
+    for (auto it = call_history_.rbegin(); it != call_history_.rend(); ++it) {
+      if (it->call_id < call.call_id && it->depth + 1 == call.depth) {
+        caller = it->function_name;
+        break;
+      }
+    }
+
+    line += caller + " → " + call.function_name;
+    file << line << std::endl;
+  }
+
+  file.close();
+  std::cout << "[WASM_TRACE] Exported textual trace to " << output_filename
+            << std::endl;
 }
 
 void CallTracer::PrintStatistics() {
@@ -686,45 +779,3 @@ void CallTracer::PrintCallFrequency() { PrintHotFunctions(10); }
 
 }  // namespace liftoff
 }  // namespace v8::internal::wasm
-
-// Implementation of ExportToText for CallTracer
-void v8::internal::wasm::liftoff::CallTracer::ExportToText(
-    const std::string& filename) {
-  if (!ShouldTrace()) return;
-
-  std::ofstream file(filename);
-  if (!file.is_open()) {
-    std::cerr << "[WASM_TRACE] Failed to open " << filename << " for writing"
-              << std::endl;
-    return;
-  }
-
-  for (const auto& call : call_history_) {
-    double elapsed = GetElapsedMs(trace_start_time_, call.start_time);
-    std::string indent = GetIndentation(call.depth);
-    std::string line;
-
-    if (call.is_import) {
-      line = "[IMPORT] ";
-    }
-
-    line += "[" + std::to_string(elapsed) + "ms] ";
-    line += indent;
-
-    // Determine caller if possible
-    std::string caller = "ENTRY";
-    for (auto it = call_history_.rbegin(); it != call_history_.rend(); ++it) {
-      if (it->call_id < call.call_id && it->depth + 1 == call.depth) {
-        caller = it->function_name;
-        break;
-      }
-    }
-
-    line += caller + " → " + call.function_name;
-    file << line << std::endl;
-  }
-
-  file.close();
-  std::cout << "[WASM_TRACE] Exported textual trace to " << filename
-            << std::endl;
-}

@@ -1018,18 +1018,27 @@ Environment::~Environment() {
     v8::internal::wasm::liftoff::CallTracer::PrintStatistics();
     v8::internal::wasm::liftoff::CallTracer::PrintHotFunctions(10);
 
-    // Use basename for unique filenames
+    // Get the trace file prefix from the tracer (which should be set during
+    // module loading)
     std::string trace_file_prefix =
-        main_script_basename_.empty() ? "wasm" : main_script_basename_;
+        v8::internal::wasm::liftoff::CallTracer::GetTraceFilePrefix();
 
-    v8::internal::wasm::liftoff::CallTracer::ExportToJSON(trace_file_prefix +
-                                                          "_trace.json");
-    v8::internal::wasm::liftoff::CallTracer::ExportToGraphViz(
-        trace_file_prefix + "_calls.dot");
-    v8::internal::wasm::liftoff::CallTracer::ExportToCSV(trace_file_prefix +
-                                                         "_calls.csv");
-    v8::internal::wasm::liftoff::CallTracer::ExportToText(trace_file_prefix +
-                                                          "_trace.txt");
+    // Fallback to main_script_basename_ if tracer prefix is still default
+    if (trace_file_prefix == "wasm" && !main_script_basename_.empty()) {
+      v8::internal::wasm::liftoff::CallTracer::SetTraceFilePrefix(
+          main_script_basename_);
+      trace_file_prefix = main_script_basename_;
+    }
+
+    std::cout << "[WASM_TRACE] Using trace file prefix: " << trace_file_prefix
+              << std::endl;
+
+    // Export with automatic filename generation (empty string triggers
+    // automatic naming)
+    v8::internal::wasm::liftoff::CallTracer::ExportToJSON("");
+    v8::internal::wasm::liftoff::CallTracer::ExportToGraphViz("");
+    v8::internal::wasm::liftoff::CallTracer::ExportToCSV("");
+    v8::internal::wasm::liftoff::CallTracer::ExportToText("");
   }
 
   if (Environment** interrupt_data = interrupt_data_.load()) {

@@ -1235,7 +1235,136 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
     base::Vector<const uint8_t> wire_bytes = native_module->wire_bytes();
     wasm::ModuleWireBytes module_wire_bytes(wire_bytes);
 
-    // Register ALL exported functions immediately
+    uint32_t function_index = 0;
+
+    // STEP 1: Register ALL imported functions FIRST
+    for (const auto& import : module->import_table) {
+      if (import.kind == wasm::kExternalFunction) {
+        wasm::WasmName import_field_name =
+            module_wire_bytes.GetNameOrNull(import.field_name);
+
+        std::string func_name;
+        if (!import_field_name.empty()) {
+          func_name = std::string(
+              reinterpret_cast<const char*>(import_field_name.begin()),
+              import_field_name.size());
+        } else {
+          func_name = "import_" + std::to_string(function_index);
+        }
+
+        v8::internal::wasm::liftoff::CallTracer::RegisterFunction(
+            function_index, func_name, 0);
+        std::cout << "[WASM_TRACE] Registered import function["
+                  << function_index << "]: " << func_name << std::endl;
+        function_index++;
+      }
+    }
+
+    std::cout << "[WASM_TRACE] Registered " << function_index
+              << " import functions" << std::endl;
+
+    // STEP 2: Parse name section to get ALL function names (if available)
+    std::unordered_map<uint32_t, std::string> name_section_functions;
+    if (module->name_section.is_set()) {
+      // Get the name section data from wire bytes
+      uint32_t name_section_offset = module->name_section.offset();
+      uint32_t name_section_length = module->name_section.length();
+
+      if (name_section_offset < wire_bytes.size() &&
+          name_section_offset + name_section_length <= wire_bytes.size()) {
+        const uint8_t* data = wire_bytes.begin() + name_section_offset;
+        size_t size = name_section_length;
+
+        size_t offset = 0;
+        while (offset < size) {
+          if (offset + 1 >= size) break;
+
+          uint8_t subsection_id = data[offset++];
+
+          // Read LEB128 subsection size
+          uint32_t subsection_size = 0;
+          uint32_t shift = 0;
+          while (offset < size) {
+            uint8_t byte = data[offset++];
+            subsection_size |= (byte & 0x7F) << shift;
+            shift += 7;
+            if (!(byte & 0x80)) break;
+          }
+
+          if (subsection_id == 1) {  // Function names subsection
+            size_t subsection_end = offset + subsection_size;
+
+            // Read function count
+            uint32_t name_function_count = 0;
+            shift = 0;
+            while (offset < subsection_end) {
+              uint8_t byte = data[offset++];
+              name_function_count |= (byte & 0x7F) << shift;
+              shift += 7;
+              if (!(byte & 0x80)) break;
+            }
+
+            // Read function names
+            for (uint32_t i = 0;
+                 i < name_function_count && offset < subsection_end; i++) {
+              // Read function index
+              uint32_t name_func_index = 0;
+              shift = 0;
+              while (offset < subsection_end) {
+                uint8_t byte = data[offset++];
+                name_func_index |= (byte & 0x7F) << shift;
+                shift += 7;
+                if (!(byte & 0x80)) break;
+              }
+
+              // Read name length
+              uint32_t name_length = 0;
+              shift = 0;
+              while (offset < subsection_end) {
+                uint8_t byte = data[offset++];
+                name_length |= (byte & 0x7F) << shift;
+                shift += 7;
+                if (!(byte & 0x80)) break;
+              }
+
+              // Read name
+              if (offset + name_length <= subsection_end) {
+                std::string function_name(
+                    reinterpret_cast<const char*>(data + offset), name_length);
+                name_section_functions[name_func_index] = function_name;
+                offset += name_length;
+              }
+            }
+            break;  // Found function names, we're done
+          } else {
+            offset += subsection_size;  // Skip other subsections
+          }
+        }
+        std::cout << "[WASM_TRACE] Parsed " << name_section_functions.size()
+                  << " names from name section" << std::endl;
+      }
+    }
+
+    // STEP 3: Register ALL defined functions (continuing from where imports
+    // left off)
+    for (uint32_t i = 0; i < module->functions.size(); ++i) {
+      uint32_t absolute_index = function_index + i;
+      std::string func_name;
+
+      // Try name section first
+      auto name_it = name_section_functions.find(absolute_index);
+      if (name_it != name_section_functions.end()) {
+        func_name = name_it->second;
+      } else {
+        // Fallback to generic name
+        func_name = "func_" + std::to_string(absolute_index);
+      }
+
+      v8::internal::wasm::liftoff::CallTracer::RegisterFunction(absolute_index,
+                                                                func_name, 0);
+    }
+
+    // STEP 4: Override with export names (these take precedence)
     for (const auto& exp : module->export_table) {
       if (exp.kind == wasm::kExternalFunction) {
         wasm::WasmName export_name = module_wire_bytes.GetNameOrNull(exp.name);
@@ -1249,28 +1378,27 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
           func_name = "func_" + std::to_string(exp.index);
         }
 
+        // Re-register with export name (overwrites previous registration)
         v8::internal::wasm::liftoff::CallTracer::RegisterFunction(exp.index,
                                                                   func_name, 0);
-        // std::cout << "[WASM_TRACE] Early registered exported function "
-        //           << exp.index << ": " << func_name << std::endl;
+        std::cout << "[WASM_TRACE] Registered export function[" << exp.index
+                  << "]: " << func_name << std::endl;
       }
     }
 
-    // Register ALL other functions with generic names to ensure complete
-    // coverage
-    for (uint32_t i = 0; i < module->functions.size(); ++i) {
-      // Check if this function was already registered as an export
-      std::string existing_name =
-          v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(i);
-      if (existing_name == "func_" + std::to_string(i)) {
-        // Not registered yet, register with generic name
-        v8::internal::wasm::liftoff::CallTracer::RegisterFunction(
-            i, "func_" + std::to_string(i), 0);
-      }
-    }
+    uint32_t total_functions = function_index + module->functions.size();
+    std::cout << "[WASM_TRACE] Function name registration complete. Total: "
+              << total_functions << " functions" << std::endl;
 
-    std::cout << "[WASM_TRACE] Function name registration complete."
-              << std::endl;
+    // Debug: Print some key mappings
+    std::cout << "[WASM_TRACE] Sample function mappings:" << std::endl;
+    for (uint32_t test_idx : {16, 18, 26, 48, 49, 50, 61, 62, 64, 68, 70}) {
+      std::string resolved =
+          v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(
+              test_idx);
+      std::cout << "[WASM_TRACE]   func[" << test_idx << "]: " << resolved
+                << std::endl;
+    }
   }
 
   int num_imported_functions = module->num_imported_functions;

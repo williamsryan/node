@@ -22,10 +22,11 @@ namespace v8::internal::wasm {
 namespace liftoff {
 
 // Declare function prototypes with `extern`
-extern void DumpMemoryAccessStats();
-extern void TrackMemoryLoad(uintptr_t effective_addr, int loaded_value);
-extern void TrackMemoryStore(uintptr_t effective_addr, int stored_value);
-extern void LogMemoryAccess(uintptr_t address, const std::string& type, int value);
+// extern void DumpMemoryAccessStats();
+// extern void TrackMemoryLoad(uintptr_t effective_addr, int loaded_value);
+// extern void TrackMemoryStore(uintptr_t effective_addr, int stored_value);
+// extern void LogMemoryAccess(uintptr_t address, const std::string& type,
+//                             int value);
 
 // Liftoff Frames.
 //
@@ -420,7 +421,7 @@ void LiftoffAssembler::PatchPrepareStackFrame(
 }
 
 void LiftoffAssembler::FinishCode() {
-  liftoff::DumpMemoryAccessStats();
+  // liftoff::DumpMemoryAccessStats();
   ForceConstantPoolEmissionWithoutJump();
 }
 
@@ -694,12 +695,12 @@ void LiftoffAssembler::Load(LiftoffRegister dst, Register src_addr,
                                         offset_imm, i64_offset, shift_amount);
 
   // Compute the actual memory address being accessed
-  uintptr_t effective_addr =
-      reinterpret_cast<uintptr_t>(src_addr.code() + offset_imm);
+  // uintptr_t effective_addr =
+  //     reinterpret_cast<uintptr_t>(src_addr.code() + offset_imm);
 
-  // Track the memory read
-  int loaded_value = dst.gp().W().code();  // Capture loaded value
-  liftoff::TrackMemoryLoad(effective_addr, loaded_value);
+  // // Track the memory read
+  // int loaded_value = dst.gp().W().code();  // Capture loaded value
+  // liftoff::TrackMemoryLoad(effective_addr, loaded_value);
 
   DCHECK(!src_op.IsPostIndex());
   GetProtectedInstruction<LoadOrStore::kLoad> collect_protected_load(
@@ -759,12 +760,12 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
                                         offset_imm, i64_offset);
 
   // Compute the actual memory address being written to
-  uintptr_t effective_addr =
-      reinterpret_cast<uintptr_t>(dst_addr.code() + offset_imm);
+  // uintptr_t effective_addr =
+  //     reinterpret_cast<uintptr_t>(dst_addr.code() + offset_imm);
 
   // Capture the value being stored
-  int stored_value = src.gp().W().code();  // Capture stored value
-  liftoff::TrackMemoryStore(effective_addr, stored_value);
+  // int stored_value = src.gp().W().code();  // Capture stored value
+  // liftoff::TrackMemoryStore(effective_addr, stored_value);
 
   DCHECK(!dst_op.IsPostIndex());
   GetProtectedInstruction<LoadOrStore::kStore> collect_protected_store(

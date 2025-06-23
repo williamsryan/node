@@ -37,6 +37,7 @@
 #include <unordered_map>
 
 #include "../deps/v8/src/wasm/baseline/liftoff-call-tracer.h"
+#include "../deps/v8/src/wasm/baseline/liftoff-memory-tracker.h"
 
 namespace node {
 
@@ -1013,6 +1014,39 @@ void Environment::SetMainScriptBasename(const std::string& script_path) {
 Environment::~Environment() {
   HandleScope handle_scope(isolate());
   Local<Context> ctx = context();
+
+  if (v8::internal::wasm::liftoff::MemoryTracker::ShouldTrackMemory()) {
+    v8::internal::wasm::liftoff::MemoryTracker::PrintStatistics();
+    v8::internal::wasm::liftoff::MemoryTracker::PrintHotOffsets(10);
+
+    // Get the trace file prefix from the memory tracker (which should be set
+    // during module loading)
+    std::string memory_trace_file_prefix =
+        v8::internal::wasm::liftoff::MemoryTracker::GetTraceFilePrefix();
+
+    // Fallback to main_script_basename_ if memory tracker prefix is still
+    // default
+    if (memory_trace_file_prefix == "wasm_memory" &&
+        !main_script_basename_.empty()) {
+      v8::internal::wasm::liftoff::MemoryTracker::SetTraceFilePrefix(
+          main_script_basename_ + "_memory");
+      memory_trace_file_prefix = main_script_basename_ + "_memory";
+    }
+
+    std::cout << "[WASM_MEMORY] Using memory trace file prefix: "
+              << memory_trace_file_prefix << std::endl;
+
+    // Export with automatic filename generation (empty string triggers
+    // automatic naming)
+    v8::internal::wasm::liftoff::MemoryTracker::ExportOffsetAnalysisToJSON("");
+    v8::internal::wasm::liftoff::MemoryTracker::ExportMemoryStatsToJSON("");
+    v8::internal::wasm::liftoff::MemoryTracker::ExportToCSV("");
+    v8::internal::wasm::liftoff::MemoryTracker::ExportToText("");
+
+    // Print final analysis
+    v8::internal::wasm::liftoff::MemoryTracker::AnalyzeOffsetPatterns();
+    v8::internal::wasm::liftoff::MemoryTracker::FindOffsetClusters();
+  }
 
   if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
     v8::internal::wasm::liftoff::CallTracer::PrintStatistics();

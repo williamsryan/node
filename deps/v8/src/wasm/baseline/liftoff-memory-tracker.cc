@@ -49,6 +49,14 @@ bool MemoryTracker::ShouldTrackMemory() {
                      "NODE_WASM_MEMORY_DETAILED=1"
                   << std::endl;
       }
+
+      // Check for custom memory trace file prefix from environment
+      const char* prefix_env = std::getenv("NODE_WASM_MEMORY_PREFIX");
+      if (prefix_env) {
+        trace_file_prefix_ = std::string(prefix_env);
+        std::cout << "[MemHook] Using custom memory trace prefix from env: "
+                  << trace_file_prefix_ << std::endl;
+      }
     }
   }
   return should_track;

@@ -77,6 +77,7 @@ class CallTracer {
   // Enhanced function name resolution (UPDATED)
   static std::string GetFunctionName(uint32_t function_index);
   static std::string ResolveFunctionName(uint32_t function_index);
+  static bool IsImportFunction(uint32_t function_index);
   static void SetModuleInfo(const void* module, const void* wire_bytes);
 
   // Call stack and depth utilities

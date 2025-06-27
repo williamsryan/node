@@ -639,6 +639,7 @@ void WasmTableObject::SetFunctionTablePlaceholder(
   table->entries()->set(entry_index, *tuple);
 }
 
+namespace {  // Anonymous namespace
 std::string CleanFilename(const std::string& raw_filename) {
   std::string cleaned;
 
@@ -658,6 +659,7 @@ std::string CleanFilename(const std::string& raw_filename) {
 
   return cleaned;
 }
+}  // namespace
 
 // static
 void WasmTableObject::GetFunctionTableEntry(

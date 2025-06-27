@@ -15,7 +15,7 @@ thread_local std::chrono::high_resolution_clock::time_point
     CallTracer::trace_start_time_;
 thread_local bool CallTracer::timing_enabled_ = true;
 thread_local bool CallTracer::depth_visualization_enabled_ = true;
-thread_local uint32_t CallTracer::max_depth_ = 50;
+thread_local uint32_t CallTracer::max_depth_ = 10000;  // UINT32_MAX
 thread_local std::ofstream CallTracer::trace_output_file_;
 
 // Global static member definitions (ENHANCED)
@@ -360,6 +360,11 @@ void CallTracer::TraceRuntimeCall(uintptr_t target) {
   }
 }
 
+bool CallTracer::IsImportFunction(uint32_t function_index) {
+  auto it = is_import_function_.find(function_index);
+  return it != is_import_function_.end() && it->second;
+}
+
 void CallTracer::TraceRuntimeCall(const std::string& function_name) {
   if (!ShouldTrace()) return;
 
@@ -385,8 +390,10 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
     resolved_name = function_name;
   }
 
+  bool is_import = IsImportFunction(func_index);
+
   // Record the call with the resolved name
-  RecordFunctionCall(resolved_name, false);
+  RecordFunctionCall(resolved_name, is_import);
 
   // Create call info
   CallInfo call_info;
@@ -395,7 +402,7 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
   call_info.start_time = now;
   call_info.depth = depth;
   call_info.call_id = next_call_id_++;
-  call_info.is_import = false;
+  call_info.is_import = is_import;
   call_info.completed = false;
 
   // Mark function as executed
@@ -657,16 +664,18 @@ void CallTracer::ExportToJSON(const std::string& filename) {
 
   double overall_coverage =
       total_available_functions > 0
-          ? (double)total_executed_functions / total_available_functions * 100.0
+          ? static_cast<double>(total_executed_functions) /
+                total_available_functions * 100.0
           : 0.0;
-  double import_coverage =
-      total_available_imports > 0
-          ? (double)executed_imports.size() / total_available_imports * 100.0
-          : 0.0;
-  double module_coverage = total_available_module_functions > 0
-                               ? (double)executed_module_functions.size() /
-                                     total_available_module_functions * 100.0
+  double import_coverage = total_available_imports > 0
+                               ? static_cast<double>(executed_imports.size()) /
+                                     total_available_imports * 100.0
                                : 0.0;
+  double module_coverage =
+      total_available_module_functions > 0
+          ? static_cast<double>(executed_module_functions.size()) /
+                total_available_module_functions * 100.0
+          : 0.0;
 
   file << "{\n";
 

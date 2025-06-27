@@ -18,11 +18,19 @@ thread_local bool CallTracer::depth_visualization_enabled_ = true;
 thread_local uint32_t CallTracer::max_depth_ = 50;
 thread_local std::ofstream CallTracer::trace_output_file_;
 
-// Global static member definitions
+// Global static member definitions (ENHANCED)
 std::unordered_map<uintptr_t, std::string> CallTracer::function_names_;
 std::unordered_map<uint32_t, std::string> CallTracer::function_index_to_name_;
 std::unordered_map<uint32_t, std::vector<uint32_t>> CallTracer::call_graph_;
 std::unordered_map<uint32_t, uint32_t> CallTracer::call_counts_;
+
+// NEW: Enhanced module and import tracking
+std::unordered_map<std::string, ModuleInfo> CallTracer::module_info_;
+std::string CallTracer::current_module_name_;
+std::unordered_map<uint32_t, bool> CallTracer::is_import_function_;
+std::unordered_map<uint32_t, std::string> CallTracer::import_module_names_;
+std::unordered_map<uint32_t, std::string> CallTracer::import_field_names_;
+
 const void* CallTracer::current_module_ = nullptr;
 const void* CallTracer::current_wire_bytes_ = nullptr;
 bool CallTracer::module_names_extracted_ = false;
@@ -58,6 +66,250 @@ bool CallTracer::ShouldTrace() {
   return should_trace;
 }
 
+// ===== NEW: Enhanced Function Registration Methods =====
+
+void CallTracer::RegisterFunctionName(uint32_t function_index,
+                                      const std::string& name) {
+  if (!ShouldTrace()) return;
+
+  function_index_to_name_[function_index] = name;
+
+  // Add to current module's available functions
+  if (!current_module_name_.empty()) {
+    auto& module = module_info_[current_module_name_];
+    module.available_functions.insert(function_index);
+    module.total_functions =
+        std::max(module.total_functions, function_index + 1);
+  }
+
+  // std::cout << "[WASM_TRACE] Registered function " << function_index << " as
+  // '"
+  //           << name << "'" << std::endl;
+}
+
+void CallTracer::RegisterImportFunction(uint32_t function_index,
+                                        const std::string& module_name,
+                                        const std::string& field_name) {
+  if (!ShouldTrace()) return;
+
+  std::string import_name;
+  if (!module_name.empty() && !field_name.empty()) {
+    import_name = module_name + "." + field_name;
+  } else if (!field_name.empty()) {
+    import_name = field_name;
+  } else {
+    import_name = "import_" + std::to_string(function_index);
+  }
+
+  // Register the import function
+  function_index_to_name_[function_index] = import_name;
+  is_import_function_[function_index] = true;
+  import_module_names_[function_index] = module_name;
+  import_field_names_[function_index] = field_name;
+
+  // Add to current module info
+  if (!current_module_name_.empty()) {
+    auto& module = module_info_[current_module_name_];
+    module.available_functions.insert(function_index);
+    module.imported_functions++;
+    module.total_functions =
+        std::max(module.total_functions, function_index + 1);
+  }
+
+  std::cout << "[WASM_TRACE] Registered import function " << function_index
+            << ": " << import_name << " (module: " << module_name << ")"
+            << std::endl;
+}
+
+void CallTracer::SetCurrentModule(const std::string& module_name) {
+  if (!ShouldTrace()) return;
+
+  current_module_name_ = module_name;
+  if (module_info_.find(module_name) == module_info_.end()) {
+    ModuleInfo info;
+    info.module_name = module_name;
+    info.total_functions = 0;
+    info.imported_functions = 0;
+    info.module_functions = 0;
+    module_info_[module_name] = info;
+  }
+
+  std::cout << "[WASM_TRACE] Set current module to: " << module_name
+            << std::endl;
+}
+
+void CallTracer::LogFunctionInventory(const std::string& module_name,
+                                      uint32_t total_functions) {
+  if (!ShouldTrace()) return;
+
+  auto it = module_info_.find(module_name);
+  if (it != module_info_.end()) {
+    it->second.total_functions = total_functions;
+  }
+
+  std::cout << "[WASM_TRACE] === FUNCTION INVENTORY: " << module_name
+            << " ===" << std::endl;
+  std::cout << "[WASM_TRACE] {" << std::endl;
+  std::cout << "[WASM_TRACE]   \"module\": \"" << module_name << "\","
+            << std::endl;
+  std::cout << "[WASM_TRACE]   \"total_functions\": " << total_functions << ","
+            << std::endl;
+
+  if (it != module_info_.end()) {
+    std::cout << "[WASM_TRACE]   \"imported_functions\": "
+              << it->second.imported_functions << "," << std::endl;
+    std::cout << "[WASM_TRACE]   \"module_functions\": "
+              << (total_functions - it->second.imported_functions) << ","
+              << std::endl;
+  }
+
+  std::cout << "[WASM_TRACE]   \"functions\": {" << std::endl;
+
+  for (uint32_t i = 0; i < total_functions; ++i) {
+    std::string func_name = GetFunctionName(i);
+    bool is_import = is_import_function_[i];
+
+    std::cout << "[WASM_TRACE]     \"" << i << "\": \"" << func_name;
+    if (is_import) {
+      std::cout << " [IMPORT]";
+    }
+    std::cout << "\"";
+    if (i < total_functions - 1) {
+      std::cout << ",";
+    }
+    std::cout << std::endl;
+  }
+
+  std::cout << "[WASM_TRACE]   }" << std::endl;
+  std::cout << "[WASM_TRACE] }" << std::endl;
+}
+
+void CallTracer::LogExecutionCoverage(
+    const std::string& module_name,
+    const std::unordered_set<uint32_t>& executed_functions) {
+  if (!ShouldTrace()) return;
+
+  auto it = module_info_.find(module_name);
+  if (it == module_info_.end()) return;
+
+  const ModuleInfo& module = it->second;
+
+  std::cout << "[WASM_TRACE] === EXECUTION COVERAGE: " << module_name
+            << " ===" << std::endl;
+  std::cout << "[WASM_TRACE] Total functions: "
+            << module.available_functions.size() << std::endl;
+  std::cout << "[WASM_TRACE] Executed functions: " << executed_functions.size()
+            << std::endl;
+
+  if (!module.available_functions.empty()) {
+    double coverage = static_cast<double>(executed_functions.size()) /
+                      module.available_functions.size() * 100.0;
+    std::cout << "[WASM_TRACE] Coverage: " << std::fixed << std::setprecision(1)
+              << coverage << "%" << std::endl;
+  }
+
+  // Log functions that were never called
+  std::cout << "[WASM_TRACE] Unexecuted functions: ";
+  bool first = true;
+  for (uint32_t func_idx : module.available_functions) {
+    if (executed_functions.find(func_idx) == executed_functions.end()) {
+      if (!first) std::cout << ", ";
+      std::cout << func_idx << "(" << GetFunctionName(func_idx) << ")";
+      first = false;
+    }
+  }
+  std::cout << std::endl;
+}
+
+std::unordered_set<uint32_t> CallTracer::GetModuleFunctions(
+    const std::string& module_name) {
+  auto it = module_info_.find(module_name);
+  if (it != module_info_.end()) {
+    return it->second.available_functions;
+  }
+  return std::unordered_set<uint32_t>();
+}
+
+std::unordered_set<uint32_t> CallTracer::GetExecutedFunctions(
+    const std::string& module_name) {
+  auto it = module_info_.find(module_name);
+  if (it != module_info_.end()) {
+    return it->second.executed_functions;
+  }
+  return std::unordered_set<uint32_t>();
+}
+
+void CallTracer::MarkFunctionExecuted(uint32_t function_index) {
+  if (!current_module_name_.empty()) {
+    module_info_[current_module_name_].executed_functions.insert(
+        function_index);
+  }
+}
+
+// ===== Enhanced Function Name Resolution =====
+
+std::string CallTracer::GetFunctionName(uint32_t function_index) {
+  auto it = function_index_to_name_.find(function_index);
+  if (it != function_index_to_name_.end()) {
+    return it->second;
+  }
+
+  // Fallback to generic name
+  return "func_" + std::to_string(function_index);
+}
+
+std::string CallTracer::ResolveFunctionName(uint32_t function_index) {
+  return GetFunctionName(function_index);  // Alias for compatibility
+}
+
+// ===== Enhanced Tracing Methods =====
+
+void CallTracer::TraceCallWithIndex(uint32_t function_index) {
+  if (!ShouldTrace()) return;
+
+  std::string resolved_name = GetFunctionName(function_index);
+  bool is_import = is_import_function_[function_index];
+
+  MarkFunctionExecuted(function_index);
+
+  if (is_import) {
+    TraceImportCall(resolved_name);
+  } else {
+    TraceRuntimeCall(resolved_name);
+  }
+}
+
+void CallTracer::TraceImportCallWithIndex(uint32_t function_index) {
+  if (!ShouldTrace()) return;
+
+  std::string import_name = GetFunctionName(function_index);
+  MarkFunctionExecuted(function_index);
+  TraceImportCall(import_name);
+}
+
+void CallTracer::LogFunctionCallWithIndex(uint32_t function_index,
+                                          bool is_import, uint64_t timestamp_us,
+                                          uint32_t depth, bool is_entry) {
+  if (!ShouldTrace()) return;
+
+  std::string func_name = GetFunctionName(function_index);
+
+  std::string prefix = "[" + std::to_string(timestamp_us / 1000.0) + "ms] ";
+  prefix += std::string(depth * 2, ' ');  // Indentation based on depth
+
+  if (is_entry) {
+    prefix += "ENTRY → ";
+  }
+
+  if (is_import) {
+    prefix += "[IMPORT] ";
+  }
+
+  std::cout << prefix << func_name << std::endl;
+}
+
+// ===== Existing Methods (Updated to use enhanced resolution) =====
+
 void CallTracer::SetTraceFilePrefix(const std::string& prefix) {
   if (!prefix.empty()) {
     trace_file_prefix_ = ExtractBasename(prefix);
@@ -89,19 +341,7 @@ void CallTracer::RegisterFunction(uint32_t index, const std::string& name,
   if (!ShouldTrace()) return;
 
   function_names_[target] = name;
-  function_index_to_name_[index] = name;
-
-  // std::cout << "[WASM_TRACE] Registered function: " << name
-  //           << " (index: " << index << ", target: 0x" << std::hex << target
-  //           << std::dec << ")" << std::endl;
-}
-
-std::string CallTracer::ResolveFunctionName(uint32_t function_index) {
-  auto it = function_index_to_name_.find(function_index);
-  if (it != function_index_to_name_.end()) {
-    return it->second;
-  }
-  return "func_" + std::to_string(function_index);
+  RegisterFunctionName(index, name);
 }
 
 void CallTracer::SetModuleInfo(const void* module, const void* wire_bytes) {
@@ -134,9 +374,9 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
     return;
   }
 
-  // CRITICAL FIX: Always try to resolve function names
+  // Resolve function names using enhanced resolution
   uint32_t func_index = ExtractFunctionIndex(function_name);
-  std::string resolved_name = ResolveFunctionName(func_index);
+  std::string resolved_name = GetFunctionName(func_index);
 
   // If resolution gave us back a generic name but we had a specific name,
   // prefer the specific one
@@ -158,6 +398,9 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
   call_info.is_import = false;
   call_info.completed = false;
 
+  // Mark function as executed
+  MarkFunctionExecuted(func_index);
+
   // Print with optional timing and depth visualization
   if (timing_enabled_) {
     double elapsed = GetElapsedMs(trace_start_time_, now);
@@ -168,11 +411,11 @@ void CallTracer::TraceRuntimeCall(const std::string& function_name) {
     std::cout << GetIndentation(depth);
   }
 
-  // ALSO resolve the caller name if it's not ENTRY
+  // Resolve the caller name if it's not ENTRY
   std::string resolved_caller = caller;
   if (caller != "ENTRY") {
     uint32_t caller_index = ExtractFunctionIndex(caller);
-    std::string temp_resolved = ResolveFunctionName(caller_index);
+    std::string temp_resolved = GetFunctionName(caller_index);
     // If we got a better resolution, use it
     if (temp_resolved.substr(0, 5) != "func_" ||
         caller.substr(0, 5) == "func_") {
@@ -202,10 +445,15 @@ void CallTracer::TraceImportCall(const std::string& import_name) {
   uint32_t depth = call_stack_.size();
   std::string caller = call_stack_.empty() ? "ENTRY" : call_stack_.back();
 
+  // Extract function index for imports (if available)
+  uint32_t func_index = ExtractFunctionIndex(import_name);
+
+  // Mark as executed
+  MarkFunctionExecuted(func_index);
+
   // Create call info for import
   CallInfo call_info;
-  call_info.function_index =
-      0;  // Imports don't have function indices in our numbering
+  call_info.function_index = func_index;
   call_info.function_name = import_name;
   call_info.start_time = now;
   call_info.end_time = now;  // Imports complete immediately
@@ -228,7 +476,7 @@ void CallTracer::TraceImportCall(const std::string& import_name) {
   std::string resolved_caller = caller;
   if (caller != "ENTRY") {
     uint32_t caller_index = ExtractFunctionIndex(caller);
-    std::string temp_resolved = ResolveFunctionName(caller_index);
+    std::string temp_resolved = GetFunctionName(caller_index);
     if (temp_resolved.substr(0, 5) != "func_" ||
         caller.substr(0, 5) == "func_") {
       resolved_caller = temp_resolved;
@@ -253,7 +501,7 @@ void CallTracer::TraceFunctionExit(const std::string& function_name) {
 
     // Resolve the function name for consistency
     uint32_t func_index = ExtractFunctionIndex(function_name);
-    std::string resolved_name = ResolveFunctionName(func_index);
+    std::string resolved_name = GetFunctionName(func_index);
 
     // If resolution gave us back a generic name but we had a specific name,
     // prefer the specific one
@@ -297,13 +545,6 @@ void CallTracer::TraceFunctionExit(const std::string& function_name) {
   }
 }
 
-void CallTracer::TraceCallWithIndex(uint32_t function_index) {
-  if (!ShouldTrace()) return;
-
-  std::string resolved_name = ResolveFunctionName(function_index);
-  TraceRuntimeCall(resolved_name);
-}
-
 uint32_t CallTracer::GetCurrentDepth() { return call_stack_.size(); }
 
 std::string CallTracer::GetCurrentFunction() {
@@ -332,7 +573,13 @@ void CallTracer::DebugPrintRegistrations() {
 
   std::cout << "[WASM_TRACE] === Registered Function Names ===" << std::endl;
   for (const auto& [index, name] : function_index_to_name_) {
-    std::cout << "  Index " << index << " → " << name << std::endl;
+    bool is_import = is_import_function_[index];
+    std::cout << "  Index " << index << " → " << name;
+    if (is_import) {
+      std::cout << " [IMPORT: " << import_module_names_[index] << "."
+                << import_field_names_[index] << "]";
+    }
+    std::cout << std::endl;
   }
   std::cout << "==============================" << std::endl;
 }
@@ -359,29 +606,191 @@ void CallTracer::ExportToJSON(const std::string& filename) {
     return;
   }
 
-  file << "{\n";
-  file << "  \"trace_info\": {\n";
-  file << "    \"total_calls\": " << call_history_.size() << ",\n";
-  file << "    \"unique_functions\": " << function_index_to_name_.size()
-       << ",\n";
-  file << "    \"max_depth\": " << [&]() {
-    uint32_t max_depth = 0;
-    for (const auto& call : call_history_) {
-      max_depth = std::max(max_depth, call.depth);
+  // Calculate comprehensive statistics
+  std::unordered_set<uint32_t> executed_functions_set;
+  std::unordered_set<uint32_t> executed_imports;
+  std::unordered_set<uint32_t> executed_module_functions;
+
+  for (const auto& call : call_history_) {
+    executed_functions_set.insert(call.function_index);
+    if (call.is_import || is_import_function_[call.function_index]) {
+      executed_imports.insert(call.function_index);
+    } else {
+      executed_module_functions.insert(call.function_index);
     }
-    return max_depth;
-  }() << "\n";
+  }
+
+  uint32_t max_depth = 0;
+  uint32_t import_call_count = 0;
+  uint32_t module_call_count = 0;
+  double total_execution_time = 0.0;
+  uint32_t completed_calls = 0;
+
+  for (const auto& call : call_history_) {
+    max_depth = std::max(max_depth, call.depth);
+    if (call.is_import || is_import_function_[call.function_index]) {
+      import_call_count++;
+    } else {
+      module_call_count++;
+    }
+
+    if (call.completed) {
+      total_execution_time += GetElapsedMs(call.start_time, call.end_time);
+      completed_calls++;
+    }
+  }
+
+  // Count available functions by type
+  uint32_t total_available_imports = 0;
+  uint32_t total_available_module_functions = 0;
+
+  for (const auto& [index, name] : function_index_to_name_) {
+    if (is_import_function_[index]) {
+      total_available_imports++;
+    } else {
+      total_available_module_functions++;
+    }
+  }
+
+  uint32_t total_available_functions = function_index_to_name_.size();
+  uint32_t total_executed_functions = executed_functions_set.size();
+
+  double overall_coverage =
+      total_available_functions > 0
+          ? (double)total_executed_functions / total_available_functions * 100.0
+          : 0.0;
+  double import_coverage =
+      total_available_imports > 0
+          ? (double)executed_imports.size() / total_available_imports * 100.0
+          : 0.0;
+  double module_coverage = total_available_module_functions > 0
+                               ? (double)executed_module_functions.size() /
+                                     total_available_module_functions * 100.0
+                               : 0.0;
+
+  file << "{\n";
+
+  // Enhanced trace_info with comprehensive statistics
+  file << "  \"trace_info\": {\n";
+  file << "    \"module_name\": \"" << EscapeJSON(current_module_name_)
+       << "\",\n";
+  file << "    \"total_calls\": " << call_history_.size() << ",\n";
+  file << "    \"unique_functions_executed\": " << total_executed_functions
+       << ",\n";
+  file << "    \"max_depth\": " << max_depth << ",\n";
+  file << "    \"total_execution_time_ms\": " << std::fixed
+       << std::setprecision(3) << total_execution_time << ",\n";
+  file << "    \"average_call_duration_ms\": " << std::fixed
+       << std::setprecision(3)
+       << (completed_calls > 0 ? total_execution_time / completed_calls : 0.0)
+       << "\n";
   file << "  },\n";
 
+  // NEW: Module statistics section
+  file << "  \"module_stats\": {\n";
+  file << "    \"total_available_functions\": " << total_available_functions
+       << ",\n";
+  file << "    \"total_executed_functions\": " << total_executed_functions
+       << ",\n";
+  file << "    \"overall_coverage_percent\": " << std::fixed
+       << std::setprecision(1) << overall_coverage << ",\n";
+  file << "    \"import_functions\": {\n";
+  file << "      \"total_available\": " << total_available_imports << ",\n";
+  file << "      \"executed\": " << executed_imports.size() << ",\n";
+  file << "      \"coverage_percent\": " << std::fixed << std::setprecision(1)
+       << import_coverage << ",\n";
+  file << "      \"total_calls\": " << import_call_count << "\n";
+  file << "    },\n";
+  file << "    \"module_functions\": {\n";
+  file << "      \"total_available\": " << total_available_module_functions
+       << ",\n";
+  file << "      \"executed\": " << executed_module_functions.size() << ",\n";
+  file << "      \"coverage_percent\": " << std::fixed << std::setprecision(1)
+       << module_coverage << ",\n";
+  file << "      \"total_calls\": " << module_call_count << "\n";
+  file << "    }\n";
+  file << "  },\n";
+
+  // NEW: All available functions (not just executed ones)
   file << "  \"functions\": {\n";
   bool first_func = true;
+
+  // Create a sorted list of ALL function indices for consistent output
+  std::vector<uint32_t> all_function_indices;
   for (const auto& [index, name] : function_index_to_name_) {
+    all_function_indices.push_back(index);
+  }
+  std::sort(all_function_indices.begin(), all_function_indices.end());
+
+  for (uint32_t index : all_function_indices) {
     if (!first_func) file << ",\n";
-    file << "    \"" << index << "\": \"" << EscapeJSON(name) << "\"";
+
+    std::string func_name = function_index_to_name_[index];
+    bool is_import = is_import_function_[index];
+    bool was_executed =
+        executed_functions_set.find(index) != executed_functions_set.end();
+    uint32_t call_count = call_counts_[index];
+
+    file << "    \"" << index << "\": {\n";
+    file << "      \"name\": \"" << EscapeJSON(func_name) << "\",\n";
+    file << "      \"type\": \"" << (is_import ? "import" : "module")
+         << "\",\n";
+    file << "      \"executed\": " << (was_executed ? "true" : "false")
+         << ",\n";
+    file << "      \"call_count\": " << call_count;
+
+    // Add import-specific information
+    if (is_import) {
+      auto module_it = import_module_names_.find(index);
+      auto field_it = import_field_names_.find(index);
+      if (module_it != import_module_names_.end() ||
+          field_it != import_field_names_.end()) {
+        file << ",\n      \"import_info\": {\n";
+        if (module_it != import_module_names_.end()) {
+          file << "        \"module\": \"" << EscapeJSON(module_it->second)
+               << "\"";
+        }
+        if (field_it != import_field_names_.end()) {
+          if (module_it != import_module_names_.end()) file << ",\n";
+          file << "        \"field\": \"" << EscapeJSON(field_it->second)
+               << "\"";
+        }
+        file << "\n      }";
+      }
+    }
+
+    file << "\n    }";
     first_func = false;
   }
   file << "\n  },\n";
 
+  // Enhanced execution summary
+  file << "  \"execution_summary\": {\n";
+  file << "    \"executed_functions\": [";
+  bool first_exec = true;
+  std::vector<uint32_t> executed_sorted(executed_functions_set.begin(),
+                                        executed_functions_set.end());
+  std::sort(executed_sorted.begin(), executed_sorted.end());
+  for (uint32_t func_idx : executed_sorted) {
+    if (!first_exec) file << ", ";
+    file << func_idx;
+    first_exec = false;
+  }
+  file << "],\n";
+
+  file << "    \"unexecuted_functions\": [";
+  bool first_unexec = true;
+  for (uint32_t index : all_function_indices) {
+    if (executed_functions_set.find(index) == executed_functions_set.end()) {
+      if (!first_unexec) file << ", ";
+      file << index;
+      first_unexec = false;
+    }
+  }
+  file << "]\n";
+  file << "  },\n";
+
+  // Existing call_history section (unchanged)
   file << "  \"call_history\": [\n";
   bool first_call = true;
   for (const auto& call : call_history_) {
@@ -413,6 +822,7 @@ void CallTracer::ExportToJSON(const std::string& filename) {
   }
   file << "\n  ],\n";
 
+  // Existing call_graph section (unchanged)
   file << "  \"call_graph\": {\n";
   bool first_graph = true;
   for (const auto& [caller, callees] : call_graph_) {
@@ -429,11 +839,13 @@ void CallTracer::ExportToJSON(const std::string& filename) {
   }
   file << "\n  },\n";
 
+  // Existing call_counts section (but now includes ALL functions)
   file << "  \"call_counts\": {\n";
   bool first_count = true;
-  for (const auto& [func_index, count] : call_counts_) {
+  for (uint32_t index : all_function_indices) {
     if (!first_count) file << ",\n";
-    file << "    \"" << func_index << "\": " << count;
+    uint32_t count = call_counts_[index];  // Will be 0 for unexecuted functions
+    file << "    \"" << index << "\": " << count;
     first_count = false;
   }
   file << "\n  }\n";
@@ -443,6 +855,9 @@ void CallTracer::ExportToJSON(const std::string& filename) {
 
   std::cout << "[WASM_TRACE] Exported trace to " << output_filename
             << std::endl;
+  std::cout << "[WASM_TRACE] Coverage: " << std::fixed << std::setprecision(1)
+            << overall_coverage << "% (" << total_executed_functions << "/"
+            << total_available_functions << " functions)" << std::endl;
 }
 
 void CallTracer::ExportToGraphViz(const std::string& filename) {
@@ -472,8 +887,12 @@ void CallTracer::ExportToGraphViz(const std::string& filename) {
     if (call_count > 50) color = "orange";
     if (call_count > 100) color = "red";
 
+    // Add import indicator
+    std::string shape = is_import_function_[index] ? "ellipse" : "box";
+
     file << "  func_" << index << " [label=\"" << name << "\\n(index: " << index
-         << ", calls: " << call_count << ")\", fillcolor=" << color << "];\n";
+         << ", calls: " << call_count << ")\", fillcolor=" << color
+         << ", shape=" << shape << "];\n";
   }
 
   file << "\n";
@@ -636,8 +1055,8 @@ void CallTracer::PrintHotFunctions(int top_n) {
        ++i) {
     uint32_t func_idx = sorted_calls[i].first;
     uint32_t count = sorted_calls[i].second;
-    std::cout << "  " << (i + 1) << ". " << ResolveFunctionName(func_idx)
-              << ": " << count << " calls" << std::endl;
+    std::cout << "  " << (i + 1) << ". " << GetFunctionName(func_idx) << ": "
+              << count << " calls" << std::endl;
   }
 
   std::cout << "==============================\n" << std::endl;
@@ -733,6 +1152,8 @@ void CallTracer::Reset() {
   next_call_id_ = 0;
   call_counts_.clear();
   call_graph_.clear();
+  module_info_.clear();
+  current_module_name_.clear();
   if (trace_output_file_.is_open()) {
     trace_output_file_.close();
   }

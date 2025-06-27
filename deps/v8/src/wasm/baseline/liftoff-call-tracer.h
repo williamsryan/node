@@ -9,8 +9,10 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace v8::internal::wasm {
@@ -28,12 +30,34 @@ struct CallInfo {
   bool completed;
 };
 
+struct ModuleInfo {
+  std::string module_name;
+  uint32_t total_functions;
+  uint32_t imported_functions;
+  uint32_t module_functions;
+  std::unordered_set<uint32_t> available_functions;
+  std::unordered_set<uint32_t> executed_functions;
+};
+
 class CallTracer {
  public:
   // Core tracing control
   static bool ShouldTrace();
 
-  // Function registration (called during module setup)
+  // Enhanced function registration (NEW - called during module setup)
+  static void RegisterFunctionName(uint32_t function_index,
+                                   const std::string& name);
+  static void RegisterImportFunction(uint32_t function_index,
+                                     const std::string& module_name,
+                                     const std::string& field_name);
+  static void SetCurrentModule(const std::string& module_name);
+  static void LogFunctionInventory(const std::string& module_name,
+                                   uint32_t total_functions);
+  static void LogExecutionCoverage(
+      const std::string& module_name,
+      const std::unordered_set<uint32_t>& executed_functions);
+
+  // Existing function registration (maintained for compatibility)
   static void RegisterFunction(uint32_t index, const std::string& name,
                                uintptr_t target);
 
@@ -46,10 +70,12 @@ class CallTracer {
   static void TraceFunctionEntry(const std::string& function_name);
   static void TraceFunctionExit(const std::string& function_name);
 
-  // New method for tracing with function index (resolves to name automatically)
+  // Enhanced tracing with function index (NEW - automatically resolves names)
   static void TraceCallWithIndex(uint32_t function_index);
+  static void TraceImportCallWithIndex(uint32_t function_index);
 
-  // Function name resolution
+  // Enhanced function name resolution (UPDATED)
+  static std::string GetFunctionName(uint32_t function_index);
   static std::string ResolveFunctionName(uint32_t function_index);
   static void SetModuleInfo(const void* module, const void* wire_bytes);
 
@@ -90,6 +116,13 @@ class CallTracer {
                                  uint32_t function_index);
   static void TrackFunctionExit(const std::string& function_name);
 
+  // Module and coverage analysis (NEW)
+  static std::unordered_set<uint32_t> GetModuleFunctions(
+      const std::string& module_name);
+  static std::unordered_set<uint32_t> GetExecutedFunctions(
+      const std::string& module_name);
+  static void MarkFunctionExecuted(uint32_t function_index);
+
   // Utility and control
   static void Reset();
   static void EnableTiming(bool enable);
@@ -108,13 +141,20 @@ class CallTracer {
   static thread_local bool depth_visualization_enabled_;
   static thread_local uint32_t max_depth_;
 
-  // Global function metadata
+  // Global function metadata (ENHANCED)
   static std::unordered_map<uintptr_t, std::string> function_names_;
   static std::unordered_map<uint32_t, std::string> function_index_to_name_;
   static std::unordered_map<uint32_t, std::vector<uint32_t>>
       call_graph_;  // caller -> callees
   static std::unordered_map<uint32_t, uint32_t>
       call_counts_;  // function_index -> call_count
+
+  // NEW: Enhanced module and import tracking
+  static std::unordered_map<std::string, ModuleInfo> module_info_;
+  static std::string current_module_name_;
+  static std::unordered_map<uint32_t, bool> is_import_function_;
+  static std::unordered_map<uint32_t, std::string> import_module_names_;
+  static std::unordered_map<uint32_t, std::string> import_field_names_;
 
   // Module information for name resolution
   static const void* current_module_;
@@ -135,6 +175,11 @@ class CallTracer {
   static void RecordFunctionCall(const std::string& function_name,
                                  bool is_import = false);
   static std::string ExtractBasename(const std::string& filepath);
+
+  // NEW: Enhanced trace logging with resolved names
+  static void LogFunctionCallWithIndex(uint32_t function_index, bool is_import,
+                                       uint64_t timestamp_us, uint32_t depth,
+                                       bool is_entry);
 
   // Friend declarations for V8 integration
   friend void WasmRuntimeFunctionEntry(uint32_t function_index);

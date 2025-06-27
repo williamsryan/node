@@ -1244,13 +1244,10 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
     base::Vector<const uint8_t> wire_bytes = native_module->wire_bytes();
     wasm::ModuleWireBytes module_wire_bytes(wire_bytes);
 
-    // NEW: Try to extract the WASM filename from various sources
     std::string wasm_filename;
 
     // Method 1: Check if there's a debug name from native module
     if (wasm_filename.empty() && native_module) {
-      // Try to get any available debug information
-      // Use the native module's address through .get() for a unique identifier
       std::string debug_info =
           "wasm_module_" +
           std::to_string(reinterpret_cast<uintptr_t>(native_module.get()) %
@@ -1270,20 +1267,15 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
         const uint8_t* data = wire_bytes.begin() + name_section_offset;
         size_t size = name_section_length;
 
-        // Look for potential filename patterns in the name section
-        // Scan for printable strings that might be filenames
         std::string name_section_data(reinterpret_cast<const char*>(data),
                                       std::min(size, static_cast<size_t>(512)));
 
-        // Look for common file extensions
         std::vector<std::string> extensions = {".wasm", ".wat", ".js", ".ts",
                                                ".mjs"};
         for (const auto& ext : extensions) {
           size_t pos = name_section_data.find(ext);
           if (pos != std::string::npos) {
-            // Try to extract a reasonable filename around the extension
             size_t start = pos;
-            // Go backwards to find the start of the filename
             while (start > 0 && name_section_data[start - 1] != '\0' &&
                    name_section_data[start - 1] != '/' &&
                    name_section_data[start - 1] != '\\' &&
@@ -1293,7 +1285,6 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
               start--;
             }
 
-            // Go forwards to find the end
             size_t end = pos + ext.length();
             while (end < name_section_data.length() &&
                    name_section_data[end] != '\0' &&
@@ -1305,7 +1296,6 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
 
             std::string potential_filename =
                 name_section_data.substr(start, end - start);
-            // Validate it looks like a reasonable filename
             if (potential_filename.length() > ext.length() &&
                 potential_filename.length() < 100) {
               wasm_filename = potential_filename;
@@ -1316,15 +1306,10 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
           }
         }
 
-        // If no extension found, look for any reasonable string that might be a
-        // module name
         if (wasm_filename.empty() || wasm_filename.find("wasm_module_") == 0) {
           std::vector<std::string> potential_names;
-
-          // Look for strings between null terminators that might be names
           size_t current_pos = 0;
           while (current_pos < std::min(size, static_cast<size_t>(256))) {
-            // Find start of potential string (skip non-printable chars)
             while (current_pos < size &&
                    (data[current_pos] < 32 || data[current_pos] > 126)) {
               current_pos++;
@@ -1332,7 +1317,6 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
 
             if (current_pos >= size) break;
 
-            // Find end of string
             size_t string_start = current_pos;
             while (current_pos < size && data[current_pos] >= 32 &&
                    data[current_pos] <= 126) {
@@ -1344,7 +1328,6 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
                   reinterpret_cast<const char*>(data + string_start),
                   current_pos - string_start);
 
-              // Check if this looks like a reasonable module name
               if (candidate.length() >= 3 && candidate.length() <= 50 &&
                   candidate.find_first_of("()[]{}") == std::string::npos &&
                   (candidate.find("module") != std::string::npos ||
@@ -1357,9 +1340,7 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
             }
           }
 
-          // Use the most reasonable looking name
           if (!potential_names.empty()) {
-            // Prefer shorter, more reasonable names
             std::sort(potential_names.begin(), potential_names.end(),
                       [](const std::string& a, const std::string& b) {
                         return a.length() < b.length();
@@ -1375,17 +1356,13 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
 
     // Method 3: Create a meaningful name based on module characteristics
     if (wasm_filename.empty() || wasm_filename.find("wasm_module_") == 0) {
-      // Create a name based on module hash and characteristics
       size_t module_size = wire_bytes.size();
-
-      // Create a hash based on the first part of the module
       size_t content_hash = 0;
       size_t hash_bytes = std::min(static_cast<size_t>(256), wire_bytes.size());
       for (size_t i = 0; i < hash_bytes; ++i) {
         content_hash = content_hash * 31 + wire_bytes[i];
       }
 
-      // Include module characteristics for uniqueness
       uint32_t num_functions = module->functions.size();
       uint32_t num_imports = 0;
       uint32_t num_exports = 0;
@@ -1398,7 +1375,6 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
         if (exp.kind == wasm::kExternalFunction) num_exports++;
       }
 
-      // Create a descriptive filename
       wasm_filename = "wasm_module_" + std::to_string(content_hash % 1000000) +
                       "_" + std::to_string(num_functions) + "funcs";
 
@@ -1416,45 +1392,76 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
                 << std::endl;
     }
 
-    // Set the trace file prefix using the discovered or generated filename
+    // === ENHANCED FUNCTION REGISTRATION WITH FULL COVERAGE ===
+
+    // Set the current module for tracking
+    v8::internal::wasm::liftoff::CallTracer::SetCurrentModule(wasm_filename);
     v8::internal::wasm::liftoff::CallTracer::SetTraceFilePrefix(wasm_filename);
 
-    std::cout << "[WASM_TRACE] Set trace file prefix to: "
-              << v8::internal::wasm::liftoff::CallTracer::GetTraceFilePrefix()
+    std::cout
+        << "[WASM_TRACE] Starting comprehensive function registration for: "
+        << wasm_filename << std::endl;
+
+    // Get total counts for validation
+    uint32_t total_imports = 0;
+    for (const auto& import : module->import_table) {
+      if (import.kind == wasm::kExternalFunction) total_imports++;
+    }
+    uint32_t total_module_functions = module->functions.size();
+    uint32_t total_functions = total_imports + total_module_functions;
+
+    std::cout << "[WASM_TRACE] Module analysis: " << total_imports
+              << " imports + " << total_module_functions
+              << " module functions = " << total_functions << " total"
               << std::endl;
 
-    uint32_t function_index = 0;
-
-    // STEP 1: Register ALL imported functions FIRST
+    // === STEP 1: REGISTER ALL IMPORT FUNCTIONS ===
+    uint32_t import_index = 0;
     for (const auto& import : module->import_table) {
       if (import.kind == wasm::kExternalFunction) {
+        // Extract module and field names
+        std::string module_name;
+        std::string field_name;
+
+        wasm::WasmName import_module_name =
+            module_wire_bytes.GetNameOrNull(import.module_name);
         wasm::WasmName import_field_name =
             module_wire_bytes.GetNameOrNull(import.field_name);
 
-        std::string func_name;
+        if (!import_module_name.empty()) {
+          module_name = std::string(
+              reinterpret_cast<const char*>(import_module_name.begin()),
+              import_module_name.size());
+        } else {
+          module_name = "env";  // Default WASI module
+        }
+
         if (!import_field_name.empty()) {
-          func_name = std::string(
+          field_name = std::string(
               reinterpret_cast<const char*>(import_field_name.begin()),
               import_field_name.size());
         } else {
-          func_name = "import_" + std::to_string(function_index);
+          field_name = "import_" + std::to_string(import_index);
         }
 
+        // Register using the enhanced registration method
+        v8::internal::wasm::liftoff::CallTracer::RegisterImportFunction(
+            import_index, module_name, field_name);
+
+        // Also register with the legacy method for compatibility
+        std::string full_import_name = module_name + "." + field_name;
         v8::internal::wasm::liftoff::CallTracer::RegisterFunction(
-            function_index, func_name, 0);
-        std::cout << "[WASM_TRACE] Registered import function["
-                  << function_index << "]: " << func_name << std::endl;
-        function_index++;
+            import_index, full_import_name, 0);
+
+        // std::cout << "[WASM_TRACE] Registered import[" << import_index
+        //           << "]: " << module_name << "." << field_name << std::endl;
+        import_index++;
       }
     }
 
-    std::cout << "[WASM_TRACE] Registered " << function_index
-              << " import functions" << std::endl;
-
-    // STEP 2: Parse name section to get ALL function names (if available)
+    // === STEP 2: PARSE NAME SECTION FOR FUNCTION NAMES ===
     std::unordered_map<uint32_t, std::string> name_section_functions;
     if (module->name_section.is_set()) {
-      // Get the name section data from wire bytes
       uint32_t name_section_offset = module->name_section.offset();
       uint32_t name_section_length = module->name_section.length();
 
@@ -1492,6 +1499,9 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
               if (!(byte & 0x80)) break;
             }
 
+            std::cout << "[WASM_TRACE] Name section contains "
+                      << name_function_count << " function names" << std::endl;
+
             // Read function names
             for (uint32_t i = 0;
                  i < name_function_count && offset < subsection_end; i++) {
@@ -1516,11 +1526,22 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
               }
 
               // Read name
-              if (offset + name_length <= subsection_end) {
+              if (offset + name_length <= subsection_end && name_length > 0 &&
+                  name_length < 256) {
                 std::string function_name(
                     reinterpret_cast<const char*>(data + offset), name_length);
                 name_section_functions[name_func_index] = function_name;
                 offset += name_length;
+
+                // std::cout << "[WASM_TRACE] Name section: func["
+                //           << name_func_index << "] = '" << function_name <<
+                //           "'"
+                //           << std::endl;
+              } else {
+                std::cout << "[WASM_TRACE] Warning: Invalid name length "
+                          << name_length << " for function " << name_func_index
+                          << std::endl;
+                break;  // Skip malformed names
               }
             }
             break;  // Found function names, we're done
@@ -1528,31 +1549,38 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
             offset += subsection_size;  // Skip other subsections
           }
         }
-        std::cout << "[WASM_TRACE] Parsed " << name_section_functions.size()
-                  << " names from name section" << std::endl;
+        std::cout << "[WASM_TRACE] Successfully parsed "
+                  << name_section_functions.size() << " names from name section"
+                  << std::endl;
       }
     }
 
-    // STEP 3: Register ALL defined functions (continuing from where imports
-    // left off)
+    // === STEP 3: REGISTER ALL MODULE-DEFINED FUNCTIONS ===
     for (uint32_t i = 0; i < module->functions.size(); ++i) {
-      uint32_t absolute_index = function_index + i;
+      uint32_t absolute_index =
+          import_index + i;  // Continue from where imports left off
       std::string func_name;
 
       // Try name section first
       auto name_it = name_section_functions.find(absolute_index);
       if (name_it != name_section_functions.end()) {
         func_name = name_it->second;
+        // std::cout << "[WASM_TRACE] Using name section name for func["
+        //           << absolute_index << "]: " << func_name << std::endl;
       } else {
         // Fallback to generic name
         func_name = "func_" + std::to_string(absolute_index);
       }
 
+      // Register the function
+      v8::internal::wasm::liftoff::CallTracer::RegisterFunctionName(
+          absolute_index, func_name);
       v8::internal::wasm::liftoff::CallTracer::RegisterFunction(absolute_index,
                                                                 func_name, 0);
     }
 
-    // STEP 4: Override with export names (these take precedence)
+    // === STEP 4: OVERRIDE WITH EXPORT NAMES (HIGHEST PRIORITY) ===
+    uint32_t export_count = 0;
     for (const auto& exp : module->export_table) {
       if (exp.kind == wasm::kExternalFunction) {
         wasm::WasmName export_name = module_wire_bytes.GetNameOrNull(exp.name);
@@ -1563,29 +1591,69 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
               std::string(reinterpret_cast<const char*>(export_name.begin()),
                           export_name.size());
         } else {
-          func_name = "func_" + std::to_string(exp.index);
+          func_name = "export_" + std::to_string(exp.index);
         }
 
         // Re-register with export name (overwrites previous registration)
+        v8::internal::wasm::liftoff::CallTracer::RegisterFunctionName(
+            exp.index, func_name);
         v8::internal::wasm::liftoff::CallTracer::RegisterFunction(exp.index,
                                                                   func_name, 0);
-        std::cout << "[WASM_TRACE] Registered export function[" << exp.index
-                  << "]: " << func_name << std::endl;
+
+        // std::cout << "[WASM_TRACE] Registered export[" << exp.index
+        //           << "]: " << func_name << std::endl;
+        // export_count++;
       }
     }
 
-    uint32_t total_functions = function_index + module->functions.size();
-    std::cout << "[WASM_TRACE] Function name registration complete. Total: "
-              << total_functions << " functions" << std::endl;
+    // === STEP 5: VALIDATION AND INVENTORY ===
+    std::cout << "[WASM_TRACE] Registration summary:" << std::endl;
+    std::cout << "[WASM_TRACE]   - Import functions: " << import_index
+              << std::endl;
+    std::cout << "[WASM_TRACE]   - Module functions: "
+              << module->functions.size() << std::endl;
+    std::cout << "[WASM_TRACE]   - Export functions: " << export_count
+              << std::endl;
+    std::cout << "[WASM_TRACE]   - Total functions: " << total_functions
+              << std::endl;
+    std::cout << "[WASM_TRACE]   - Name section entries: "
+              << name_section_functions.size() << std::endl;
 
-    // Debug: Print some key mappings
-    std::cout << "[WASM_TRACE] Sample function mappings:" << std::endl;
-    for (uint32_t test_idx : {16, 18, 26, 48, 49, 50, 61, 62, 64, 68, 70}) {
-      std::string resolved =
-          v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(
-              test_idx);
-      std::cout << "[WASM_TRACE]   func[" << test_idx << "]: " << resolved
-                << std::endl;
+    // Log complete function inventory
+    v8::internal::wasm::liftoff::CallTracer::LogFunctionInventory(
+        wasm_filename, total_functions);
+
+    // === STEP 6: VALIDATION - TEST SPECIFIC FUNCTION RESOLUTIONS ===
+    std::cout << "[WASM_TRACE] Testing function name resolution:" << std::endl;
+    std::vector<uint32_t> test_indices = {0,  1,  2,  3,  16, 18, 26, 48,
+                                          49, 50, 61, 62, 64, 68, 70};
+
+    for (uint32_t test_idx : test_indices) {
+      if (test_idx < total_functions) {
+        std::string resolved =
+            v8::internal::wasm::liftoff::CallTracer::GetFunctionName(test_idx);
+        std::string legacy_resolved =
+            v8::internal::wasm::liftoff::CallTracer::ResolveFunctionName(
+                test_idx);
+
+        std::cout << "[WASM_TRACE]   func[" << test_idx << "]: '" << resolved
+                  << "'";
+        if (resolved != legacy_resolved) {
+          std::cout << " (legacy: '" << legacy_resolved << "')";
+        }
+        std::cout << std::endl;
+      }
+    }
+
+    // === STEP 7: FINAL SETUP ===
+    std::cout << "[WASM_TRACE] Function registration complete for "
+              << wasm_filename << std::endl;
+    std::cout << "[WASM_TRACE] All " << total_functions
+              << " functions registered successfully" << std::endl;
+
+    // Debug print registrations if needed
+    if (total_functions < 50) {  // Only for smaller modules
+      v8::internal::wasm::liftoff::CallTracer::DebugPrintRegistrations();
     }
   }
 

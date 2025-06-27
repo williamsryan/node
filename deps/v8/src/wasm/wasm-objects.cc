@@ -639,6 +639,26 @@ void WasmTableObject::SetFunctionTablePlaceholder(
   table->entries()->set(entry_index, *tuple);
 }
 
+std::string CleanFilename(const std::string& raw_filename) {
+  std::string cleaned;
+
+  for (char c : raw_filename) {
+    // Only keep printable ASCII characters and some common filename chars
+    if ((c >= 32 && c <= 126) && c != '<' && c != '>' && c != ':' && c != '"' &&
+        c != '|' && c != '?' && c != '*') {
+      cleaned += c;
+    }
+  }
+
+  // Remove any trailing non-alphanumeric characters
+  while (!cleaned.empty() && !std::isalnum(cleaned.back()) &&
+         cleaned.back() != '.') {
+    cleaned.pop_back();
+  }
+
+  return cleaned;
+}
+
 // static
 void WasmTableObject::GetFunctionTableEntry(
     Isolate* isolate, const WasmModule* module,
@@ -1144,15 +1164,15 @@ Address ImportedFunctionEntry::target() {
       instance_data_->dispatch_table_for_imports()->target(index_);
 
   // ADD SIMPLE RUNTIME TRACING:
-  if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
-    std::string caller =
-        v8::internal::wasm::liftoff::CallTracer::GetCurrentFunction();
-    std::string import_name = "import_" + std::to_string(index_);
+  // if (v8::internal::wasm::liftoff::CallTracer::ShouldTrace()) {
+  //   std::string caller =
+  //       v8::internal::wasm::liftoff::CallTracer::GetCurrentFunction();
+  //   std::string import_name = "import_" + std::to_string(index_);
 
-    std::cout << "[IMPORT_CALL] " << caller << " → " << import_name
-              << " (target: 0x" << std::hex << target_addr << std::dec << ")"
-              << std::endl;
-  }
+  //   std::cout << "[IMPORT_CALL] " << caller << " → " << import_name
+  //             << " (target: 0x" << std::hex << target_addr << std::dec << ")"
+  //             << std::endl;
+  // }
 
   return target_addr;
 }
@@ -1296,6 +1316,7 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
 
             std::string potential_filename =
                 name_section_data.substr(start, end - start);
+            potential_filename = CleanFilename(potential_filename);
             if (potential_filename.length() > ext.length() &&
                 potential_filename.length() < 100) {
               wasm_filename = potential_filename;
@@ -1327,6 +1348,9 @@ Handle<WasmTrustedInstanceData> WasmTrustedInstanceData::New(
               std::string candidate(
                   reinterpret_cast<const char*>(data + string_start),
                   current_pos - string_start);
+
+              // Clean the candidate
+              candidate = CleanFilename(candidate);
 
               if (candidate.length() >= 3 && candidate.length() <= 50 &&
                   candidate.find_first_of("()[]{}") == std::string::npos &&
